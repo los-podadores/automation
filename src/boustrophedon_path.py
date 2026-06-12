@@ -1,8 +1,3 @@
-"""
-Standalone 2D Robot Simulation in Pygame-ce.
-Upgraded with Slower Speeds and Zero-Radius "Point-and-Shoot" Pivoting.
-"""
-
 import heapq
 import logging
 import math
@@ -10,9 +5,7 @@ import math
 import pygame
 from pygame.math import Vector2
 from shapely.geometry import LineString, Point, Polygon
-from shapely.ops import unary_union
 
-# --- LOGGING CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -20,9 +13,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("HardwareSimulation")
 
-# --- CONFIGURATION & CONSTANTS ---
 WINDOW_SIZE = (1000, 800)
-FPS = 60
+FPS = 240
 
 COLOR_BG = (20, 24, 30)
 COLOR_BOUNDARY = (46, 204, 113)
@@ -39,15 +31,11 @@ ROBOT_RADIUS = 15
 D_REF = 25.0
 OR_VALUE = 50.0
 
-# SPEED ADJUSTMENTS
-V_NORMAL = 1.2  # Reduced for realism and sensor reliability
+V_NORMAL = 1.2
 SAFETY_THRES = 35.0
 
-# PD Controller Tuning
 KP = 0.015
 KD = 0.05
-
-# --- GEOMETRY UTILITIES ---
 
 
 def intersect_ray_segment(ray_origin, ray_dir, p1, p2):
@@ -71,9 +59,6 @@ def get_distance_to_geometry(origin, direction, segments, max_dist):
         if d is not None and d < min_d:
             min_d = d
     return min_d
-
-
-# --- BLIND PATHFINDING (SHAPELY) ---
 
 
 def astar_safe_path(start_pos, goal_pos, safe_poly, step=15):
@@ -187,9 +172,6 @@ def generate_coverage_path(boundary_pts, radius, start_pos):
     return waypoints
 
 
-# --- SIMULATION CLASSES ---
-
-
 class Robot:
     def __init__(self, x, y, heading_deg, boundary_pts):
         self.pos = Vector2(x, y)
@@ -210,7 +192,10 @@ class Robot:
         self.waypoints = []
         self.current_waypoint_idx = 0
 
+        self.seg_start = Vector2(x, y)
+
         self.avoid_start_dist = 0
+        self.avoid_start_pos = Vector2(x, y)
         self.avoid_path = []
 
         self.v = 0.0
@@ -252,29 +237,24 @@ class Robot:
             self.path_actual.append(Vector2(self.pos))
 
     def do_reactive_wall_following(self):
-        """Shared logic: Wall Tracking with Pivoting and Clamped PD Controller"""
-
-        # Hysteresis Lock for Left Turns
         if self.wf_state == "TURN_CONCAVE":
             if self.r_front < SAFETY_THRES + 10:
                 self.v = 0.0
-                self.omega = -0.30  # Faster Pivot Left
+                self.omega = -0.30
                 return
             else:
                 self.wf_state = "TRACKING_WALL"
                 self.prev_error = 0.0
 
-        # Standard Reactive Checks
         if self.r_front < SAFETY_THRES:
             self.wf_state = "TURN_CONCAVE"
             self.v = 0.0
-            self.omega = -0.30  # Pivot Left
+            self.omega = -0.30
             self._lost_timer = 0
             self.prev_error = 0.0
 
         elif self.r_right == OR_VALUE:
             self.wf_state = "TURN_CONVEX"
-            # Tight arc around right-hand corners
             self.v = V_NORMAL * 0.2
             self.omega = 0.30
             self._lost_timer += 1
@@ -295,7 +275,6 @@ class Robot:
             derivative = error - self.prev_error
             raw_omega = (KP * error) + (KD * derivative)
 
-            # Smooth steering clamp
             self.omega = max(-0.15, min(0.15, raw_omega))
 
             self.prev_error = error
@@ -308,7 +287,7 @@ class Robot:
             if self.r_right < OR_VALUE:
                 self.state = "TRACKING_WALL"
             elif self.r_front < SAFETY_THRES:
-                self.v, self.omega = 0.0, -0.30  # Pivot Left
+                self.v, self.omega = 0.0, -0.30
             else:
                 self.v, self.omega = V_NORMAL, 0.0
             return
@@ -328,6 +307,7 @@ class Robot:
                     self.waypoints = generate_coverage_path(
                         self.map_boundary, self.radius, self.pos
                     )
+                    self.seg_start = Vector2(self.pos)
                     return
 
     def logic_phase2(self):
@@ -340,6 +320,7 @@ class Robot:
 
         if dist_to_target < 15:
             self.current_waypoint_idx += 1
+            self.seg_start = Vector2(self.pos)
             return
 
         if self.state == "FOLLOWING_PATH":
@@ -349,20 +330,18 @@ class Robot:
                 2 * math.pi
             ) - math.pi
 
-            # ZERO-RADIUS NAVIGATION ("Point and Shoot")
-            # If off target by more than ~10 degrees, pivot in place!
             if abs(angle_diff) > math.radians(10):
                 self.v = 0.0
                 self.omega = math.copysign(0.25, angle_diff)
             else:
-                # Drive straight, applying micro-corrections
                 self.v = V_NORMAL
                 self.omega = max(-0.1, min(0.1, 0.5 * angle_diff))
 
             if self.r_front_obs < SAFETY_THRES:
-                logger.info(f"Obstacle encountered! Switching to Bug2 Avoidance.")
+                logger.info("Obstacle encountered! Switching to strict Bug2 Avoidance.")
                 self.state = "AVOID_OBSTACLE"
                 self.avoid_start_dist = dist_to_target
+                self.avoid_start_pos = Vector2(self.pos)
                 self.avoid_path = []
                 self.prev_error = 0.0
 
@@ -385,11 +364,19 @@ class Robot:
                         self.state = "FOLLOWING_PATH"
                         return
 
+            m_line = LineString([self.seg_start, target])
+            curr_pt = Point(self.pos.x, self.pos.y)
+            dist_to_m_line = m_line.distance(curr_pt)
+
+            moved_away_from_start = self.pos.distance_to(self.avoid_start_pos) > 20
+
             if (
-                dist_to_target < self.avoid_start_dist - 15
-                and self.r_front_obs > SAFETY_THRES + 10
+                dist_to_m_line < 8.0
+                and dist_to_target < self.avoid_start_dist - 10
+                and moved_away_from_start
+                and self.r_front_obs > SAFETY_THRES
             ):
-                logger.info("Cleared obstacle! Resuming path.")
+                logger.info("Strict M-Line reached and clear! Resuming path.")
                 self.state = "FOLLOWING_PATH"
 
 

@@ -1,8 +1,3 @@
-"""
-Standalone 2D Robot Simulation in Pygame-ce.
-Upgraded with "Bumper Escape Cooldown" to prevent micro-stuttering on acute corners.
-"""
-
 import heapq
 import logging
 import math
@@ -11,7 +6,6 @@ import pygame
 from pygame.math import Vector2
 from shapely.geometry import LineString, Point
 
-# --- LOGGING CONFIGURATION ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -19,9 +13,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("HardwareSimulation")
 
-# --- CONFIGURATION & CONSTANTS ---
 WINDOW_SIZE = (1000, 800)
-FPS = 60
+FPS = 240
 
 COLOR_BG = (20, 24, 30)
 COLOR_BOUNDARY = (46, 204, 113)
@@ -47,8 +40,6 @@ KD = 0.05
 GRID_SIZE = 15
 MIN_FRONTIER_SIZE = 8
 
-# --- GEOMETRY UTILITIES ---
-
 
 def intersect_ray_segment(ray_origin, ray_dir, p1, p2):
     v = ray_dir
@@ -71,9 +62,6 @@ def get_distance_to_geometry(origin, direction, segments, max_dist):
         if d is not None and d < min_d:
             min_d = d
     return min_d
-
-
-# --- SIMULATION CLASSES ---
 
 
 class Robot:
@@ -104,7 +92,7 @@ class Robot:
         self.omega = 0.0
         self._lost_timer = 0
         self.prev_error = 0.0
-        self.bump_escape_timer = 0  # NEW: Cooldown timer for blind spot snag escapes
+        self.bump_escape_timer = 0
 
     def get_grid_coords(self, position):
         return int(position.x // GRID_SIZE), int(position.y // GRID_SIZE)
@@ -227,13 +215,26 @@ class Robot:
                 if state not in ["FREE", "COVERED"]:
                     continue
 
+                too_close_to_wall = False
                 wall_penalty = 0
+
                 for nx in range(-2, 3):
                     for ny in range(-2, 3):
                         if self.internal_map.get((nxt[0] + nx, nxt[1] + ny)) == "WALL":
-                            dist = math.hypot(nx, ny)
-                            if dist < 2.5:
-                                wall_penalty += 50 / (dist + 1)
+                            dist_px = math.hypot(nx, ny) * GRID_SIZE
+
+                            if dist_px <= self.radius + 7.0:
+                                too_close_to_wall = True
+                                break
+
+                            if dist_px < self.radius + 30.0:
+                                wall_penalty += 150.0 / dist_px
+
+                    if too_close_to_wall:
+                        break
+
+                if too_close_to_wall:
+                    continue
 
                 new_cost = cost_so_far[curr] + math.hypot(dx, dy) + wall_penalty
                 if nxt not in cost_so_far or new_cost < cost_so_far[nxt]:
@@ -267,7 +268,6 @@ class Robot:
 
         self.heading_angle += self.omega * dt
 
-        # PHYSICAL BUMPER CHECK
         movement_vec = (
             Vector2(math.cos(self.heading_angle), math.sin(self.heading_angle))
             * self.v
@@ -302,9 +302,6 @@ class Robot:
                 if self.r_left <= self.radius + 5.0:
                     self.r_right = OR_VALUE + 50.0
                 else:
-                    # BLIND SPOT CORNER SNAG.
-                    # Force the robot to pivot left for a few frames to clear the snag
-                    # and sweep its sensor back onto the wall.
                     self.bump_escape_timer = 15
         else:
             self.pos = intended_pos
@@ -352,17 +349,15 @@ class Robot:
             self.omega = max(-0.1, min(0.1, 0.5 * angle_diff))
 
     def logic_coverage(self):
-        # NEW: Override coverage logic if we are actively escaping a blind-spot bump
         if self.bump_escape_timer > 0:
             self.bump_escape_timer -= 1
             self.v = 0.0
-            self.omega = -0.30  # Pivot hard left to clear the snag on the right chassis
+            self.omega = -0.30
             self.wf_state = "ESCAPE_BUMP"
             self.state = "ESCAPE_BUMP"
             self.prev_error = 0.0
             return
 
-        # DYNAMIC D_REF (CORRIDOR CENTERING)
         current_d_ref = D_REF
         if self.r_left < OR_VALUE and self.r_right < OR_VALUE:
             current_d_ref = min(D_REF, (self.r_left + self.r_right) / 2.0)
@@ -378,7 +373,6 @@ class Robot:
                 self.v, self.omega = V_NORMAL, 0.0
             return
 
-        # REACTIVE WALL FOLLOWER
         if self.wf_state == "TURN_CONCAVE":
             if self.r_front < SAFETY_THRES + 5:
                 self.v, self.omega = 0.0, -0.30
@@ -470,7 +464,7 @@ class Robot:
                         self.v, self.omega = 0.0, 0.0
                         return
 
-                    logger.info(f"Layer closed! Solidifying virtual walls.")
+                    logger.info("Layer closed! Solidifying virtual walls.")
                     left_vec = Vector2(
                         math.cos(self.heading_angle - math.pi / 2),
                         math.sin(self.heading_angle - math.pi / 2),
