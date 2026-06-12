@@ -69,8 +69,8 @@ KD             = 0.05
 
 GRID_SIZE          = 15
 HALF_GRID          = GRID_SIZE / 2.0
-MIN_FRONTIER_SIZE  = 2
-POCKET_THRESHOLD   = 35
+MIN_FRONTIER_SIZE  = 2  #Jueguen con estas dos variables, el original era 8 
+POCKET_THRESHOLD   = 35 #esa y esta xd , el original era 80  
 MAX_LAYER_STEPS    = 8000
 
 
