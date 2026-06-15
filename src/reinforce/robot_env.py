@@ -1,4 +1,5 @@
 import math
+from collections import deque
 
 import gymnasium as gym
 import numpy as np
@@ -12,11 +13,15 @@ REWARD_BASE_PENALTY = -0.02
 REWARD_CRASH_PENALTY = -40.0
 REWARD_NEW_COVERAGE = 0.055
 REWARD_FORWARD = 0.03
+REWARD_STRAIGHT_STEP = 0.015
+REWARD_STRAIGHT_CAP = 0.045
+ROTATION_THRESHOLD = 0.1
 ROBOT_SPEED_V = 1.5
 ROBOT_SPEED_W = 1.0
 DT = 0.1
 OBST_MIN = 10
 OBST_MAX = 15
+MAX_FIELD_ATTEMPTS = 100
 
 
 class RobotCoverageEnv(gym.Env):
@@ -70,6 +75,7 @@ class RobotCoverageEnv(gym.Env):
         self.obstacle_grid = set()
         self.last_v = 0.0
         self.last_w = 0.0
+        self.straight_steps = 0
 
         self.grid_resolution = min(a, b) / 4.0
 
@@ -91,8 +97,19 @@ class RobotCoverageEnv(gym.Env):
         self.obstacle_grid.clear()
         self.last_v = 0.0
         self.last_w = 0.0
+        self.straight_steps = 0
 
-        self.field = self._generate_random_field()
+        for _ in range(MAX_FIELD_ATTEMPTS):
+            self.field = self._generate_random_field()
+            pos, theta = self._get_safe_spawn()
+            if self._validate_field_accessibility(self.field, pos):
+                self.agent_pos = pos
+                self.agent_theta = theta
+                break
+        else:
+            raise RuntimeError(
+                f"Failed to generate accessible field after {MAX_FIELD_ATTEMPTS} attempts"
+            )
 
         minx, miny, maxx, maxy = self.field.bounds
         self.field_center = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
@@ -104,8 +121,6 @@ class RobotCoverageEnv(gym.Env):
         self.render_scale = self.window_size / max(width, height)
         self.render_offset_x = minx - pad
         self.render_offset_y = miny - pad
-
-        self.agent_pos, self.agent_theta = self._get_safe_spawn()
 
         entered_cells = self._update_coverage()
         for cell in entered_cells:
@@ -136,7 +151,13 @@ class RobotCoverageEnv(gym.Env):
 
         crashed = not self.field.contains(body_poly)
 
+        if abs(action[1]) < ROTATION_THRESHOLD:
+            self.straight_steps += 1
+        else:
+            self.straight_steps = 0
+
         reward = REWARD_BASE_PENALTY + REWARD_FORWARD * v
+        reward += min(self.straight_steps * REWARD_STRAIGHT_STEP, REWARD_STRAIGHT_CAP)
         terminated = False
 
         if crashed:
@@ -187,6 +208,60 @@ class RobotCoverageEnv(gym.Env):
 
             if not isinstance(final_field, MultiPolygon):
                 return final_field
+
+    def _validate_field_accessibility(self, field, spawn_pos):
+        erosion = self.b / 2.0
+        nav_field = field.buffer(-erosion)
+        if nav_field.is_empty:
+            return False
+        if isinstance(nav_field, MultiPolygon):
+            return False
+
+        minx, miny, maxx, maxy = nav_field.bounds
+        res = self.grid_resolution
+        nx = int((maxx - minx) / res) + 1
+        ny = int((maxy - miny) / res) + 1
+
+        grid = np.zeros((nx, ny), dtype=np.bool_)
+        for i in range(nx):
+            for j in range(ny):
+                cx = minx + (i + 0.5) * res
+                cy = miny + (j + 0.5) * res
+                grid[i, j] = nav_field.contains(Point(cx, cy))
+
+        total_free = int(grid.sum())
+        if total_free == 0:
+            return False
+
+        si = int((spawn_pos[0] - minx) / res)
+        sj = int((spawn_pos[1] - miny) / res)
+        si = max(0, min(nx - 1, si))
+        sj = max(0, min(ny - 1, sj))
+        if not grid[si, sj]:
+            nearest_free = np.argwhere(grid)
+            dists = np.abs(nearest_free - np.array([si, sj])).sum(axis=1)
+            idx = nearest_free[dists.argmin()]
+            si, sj = int(idx[0]), int(idx[1])
+
+        visited = np.zeros((nx, ny), dtype=np.bool_)
+        queue = deque()
+        queue.append((si, sj))
+        visited[si, sj] = True
+        reachable = 0
+
+        while queue:
+            ci, cj = queue.popleft()
+            reachable += 1
+            for di, dj in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ni, nj = ci + di, cj + dj
+                if 0 <= ni < nx and 0 <= nj < ny and not visited[ni, nj] and grid[ni, nj]:
+                    visited[ni, nj] = True
+                    queue.append((ni, nj))
+
+        if reachable < total_free * 0.95:
+            return False
+
+        return True
 
     def _get_safe_spawn(self):
         while True:
