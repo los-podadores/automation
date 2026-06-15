@@ -1,8 +1,12 @@
 [project]
 name = "automation"
 version = "0.1.0"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
+    "gymnasium>=1.2.3",
+    "matplotlib>=3.11.0",
+    "numpy>=2.4.6",
     "pygame-ce>=2.5.7",
     "shapely>=2.1.2",
+    "stable-baselines3[extra]>=2.8.0",
 ]

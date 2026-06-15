@@ -1,0 +1,471 @@
+import math
+
+import gymnasium as gym
+import numpy as np
+import pygame
+from gymnasium import spaces
+from shapely.affinity import rotate, translate
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+
+MAX_STEPS = 10000
+REWARD_BASE_PENALTY = -0.02
+REWARD_CRASH_PENALTY = -40.0
+REWARD_NEW_COVERAGE = 0.055
+REWARD_FORWARD = 0.03
+ROBOT_SPEED_V = 1.5
+ROBOT_SPEED_W = 1.0
+DT = 0.1
+OBST_MIN = 10
+OBST_MAX = 15
+
+
+class RobotCoverageEnv(gym.Env):
+    """
+    Custom Environment that follows gymnasium interface.
+    Agent is a rectangular robot navigating a randomized polygon field.
+    """
+
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
+
+    def __init__(self, a=2.0, b=1.0, render_mode=None):
+        super(RobotCoverageEnv, self).__init__()
+
+        self.a = a
+        self.b = b
+        self.max_ray_dist = b + 0.05
+        self.render_mode = render_mode
+
+        self.action_space = spaces.Box(
+            low=np.array([-1.0, -1.0]), high=np.array([1.0, 1.0]), dtype=np.float32
+        )
+
+        self.observation_space = spaces.Dict(
+            {
+                "visual": spaces.Box(
+                    low=0, high=255, shape=(3, 64, 64), dtype=np.uint8
+                ),
+                "sensors": spaces.Box(
+                    low=np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0]),
+                    high=np.array(
+                        [
+                            self.max_ray_dist,
+                            self.max_ray_dist,
+                            self.max_ray_dist,
+                            1.0,
+                            1.0,
+                            1.0,
+                            1.0,
+                        ]
+                    ),
+                    dtype=np.float32,
+                ),
+            }
+        )
+
+        self.field = None
+        self.agent_pos = None
+        self.agent_theta = 0.0
+        self.visited_grid = set()
+        self.previous_cells = set()
+        self.obstacle_grid = set()
+        self.last_v = 0.0
+        self.last_w = 0.0
+
+        self.grid_resolution = min(a, b) / 4.0
+
+        self.max_steps = MAX_STEPS
+        self.current_step = 0
+
+        self.window_size = 800
+        self.window = None
+        self.clock = None
+        self.render_scale = 1.0
+        self.render_offset_x = 0.0
+        self.render_offset_y = 0.0
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.current_step = 0
+        self.visited_grid.clear()
+        self.previous_cells.clear()
+        self.obstacle_grid.clear()
+        self.last_v = 0.0
+        self.last_w = 0.0
+
+        self.field = self._generate_random_field()
+
+        minx, miny, maxx, maxy = self.field.bounds
+        self.field_center = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
+        self.field_radius = math.hypot(maxx - minx, maxy - miny) / 2.0
+
+        pad = 5.0
+        width = (maxx - minx) + 2 * pad
+        height = (maxy - miny) + 2 * pad
+        self.render_scale = self.window_size / max(width, height)
+        self.render_offset_x = minx - pad
+        self.render_offset_y = miny - pad
+
+        self.agent_pos, self.agent_theta = self._get_safe_spawn()
+
+        entered_cells = self._update_coverage()
+        for cell in entered_cells:
+            self.visited_grid.add(cell)
+
+        obs = self._get_observation()
+        info = {"coverage_cells": len(self.visited_grid)}
+
+        return obs, info
+
+    def step(self, action):
+        self.current_step += 1
+
+        self.last_v = action[0]
+        self.last_w = action[1]
+        v = (action[0] + 1.0) / 2.0 * ROBOT_SPEED_V
+        w = action[1] * ROBOT_SPEED_W
+        dt = DT
+
+        self.agent_theta += w * dt
+        self.agent_pos = (
+            self.agent_pos[0] + v * math.cos(self.agent_theta) * dt,
+            self.agent_pos[1] + v * math.sin(self.agent_theta) * dt,
+        )
+
+        body_poly = self._get_agent_polygon()
+        obs = self._get_observation()
+
+        crashed = not self.field.contains(body_poly)
+
+        reward = REWARD_BASE_PENALTY + REWARD_FORWARD * v
+        terminated = False
+
+        if crashed:
+            reward += REWARD_CRASH_PENALTY
+            terminated = True
+        else:
+            entered_cells = self._update_coverage()
+            for cell in entered_cells:
+                if cell not in self.visited_grid:
+                    self.visited_grid.add(cell)
+                    reward += REWARD_NEW_COVERAGE
+
+        truncated = self.current_step >= self.max_steps
+        info = {"coverage_cells": len(self.visited_grid)}
+
+        return obs, float(reward), terminated, truncated, info
+
+    def _generate_random_field(self):
+        while True:
+            angles = np.sort(self.np_random.uniform(0, 2 * np.pi, 12))
+            radii = self.np_random.uniform(15.0, 25.0, 12)
+
+            points = [
+                (r * math.cos(ang), r * math.sin(ang)) for r, ang in zip(radii, angles)
+            ]
+            outer_field = Polygon(points)
+            outer_field = outer_field.buffer(2.0).simplify(1.0)
+
+            num_obstacles = self.np_random.integers(OBST_MIN, OBST_MAX)
+            obstacles = []
+            for _ in range(num_obstacles):
+                ox = self.np_random.uniform(
+                    outer_field.bounds[0] + 5, outer_field.bounds[2] - 5
+                )
+                oy = self.np_random.uniform(
+                    outer_field.bounds[1] + 5, outer_field.bounds[3] - 5
+                )
+                obs_poly = (
+                    Point(ox, oy).buffer(self.np_random.uniform(1.0, 3.0)).simplify(0.5)
+                )
+
+                if outer_field.contains(obs_poly):
+                    obstacles.append(obs_poly)
+
+            final_field = outer_field
+            for obs in obstacles:
+                final_field = final_field.difference(obs)
+
+            if not isinstance(final_field, MultiPolygon):
+                return final_field
+
+    def _get_safe_spawn(self):
+        while True:
+            boundary_coords = list(self.field.exterior.coords)
+            num_edges = len(boundary_coords) - 1
+            edge_idx = self.np_random.integers(0, num_edges)
+
+            x1, y1 = boundary_coords[edge_idx]
+            x2, y2 = boundary_coords[(edge_idx + 1) % num_edges]
+
+            t = self.np_random.uniform(0.25, 0.75)
+            px = x1 + t * (x2 - x1)
+            py = y1 + t * (y2 - y1)
+
+            dx = x2 - x1
+            dy = y2 - y1
+            edge_len = math.hypot(dx, dy)
+            nx = -dy / edge_len
+            ny = dx / edge_len
+
+            inward = self.field.representative_point()
+            if nx * (inward.x - px) + ny * (inward.y - py) < 0:
+                nx, ny = -nx, -ny
+
+            spawn_dist = self.a * 1.2
+            x = px + nx * spawn_dist
+            y = py + ny * spawn_dist
+
+            theta = math.atan2(dy, dx)
+
+            self.agent_pos = (x, y)
+            self.agent_theta = theta
+
+            body_poly = self._get_agent_polygon()
+            if self.field.contains(body_poly):
+                obs = self._get_observation()
+                if all(d > 1.0 for d in obs["sensors"][:3]):
+                    return (x, y), theta
+
+    def _get_agent_polygon(self):
+        a, b = self.a, self.b
+        rect = Polygon(
+            [(-a / 2, -b / 2), (a / 2, -b / 2), (a / 2, b / 2), (-a / 2, b / 2)]
+        )
+        rect = rotate(rect, self.agent_theta, use_radians=True, origin=(0, 0))
+        rect = translate(rect, self.agent_pos[0], self.agent_pos[1])
+        return rect
+
+    def _get_observation(self):
+        a, b = self.a, self.b
+        x, y = self.agent_pos
+        theta = self.agent_theta
+
+        def local_to_global(lx, ly):
+            gx = x + lx * math.cos(theta) - ly * math.sin(theta)
+            gy = y + lx * math.sin(theta) + ly * math.cos(theta)
+            return Point(gx, gy)
+
+        def local_dir_to_global(angle_offset):
+            ang = theta + angle_offset
+            return math.cos(ang), math.sin(ang)
+
+        origins = [
+            local_to_global(a / 2, b / 2),
+            local_to_global(a / 2, 0),
+            local_to_global(a / 2, -b / 2),
+        ]
+        angles = [math.pi / 4, 0.0, -math.pi / 4]
+
+        dists = []
+        hit_points = []
+        for origin, ang in zip(origins, angles):
+            dx, dy = local_dir_to_global(ang)
+            end = Point(
+                origin.x + dx * self.max_ray_dist,
+                origin.y + dy * self.max_ray_dist,
+            )
+            ray = LineString([origin, end])
+            dist, hit = self._calculate_ray_distance(ray, origin)
+            dists.append(dist)
+            hit_points.append(hit)
+
+        sensor_obs = np.array(
+            [
+                dists[0],
+                dists[1],
+                dists[2],
+                math.cos(theta),
+                math.sin(theta),
+                self.last_v,
+                self.last_w,
+            ],
+            dtype=np.float32,
+        )
+
+        grid_size = 64
+        visual_obs = np.zeros((3, grid_size, grid_size), dtype=np.uint8)
+
+        half_grid = grid_size // 2
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+        res = self.grid_resolution
+
+        def fill_grid(channel, cells):
+            for gx, gy in cells:
+                wx = (gx + 0.5) * res
+                wy = (gy + 0.5) * res
+                dx = wx - x
+                dy = wy - y
+                lx = dx * cos_t + dy * sin_t
+                ly = -dx * sin_t + dy * cos_t
+                vg_x = int(lx / res) + half_grid
+                vg_y = int(ly / res) + half_grid
+                if 0 <= vg_x < grid_size and 0 <= vg_y < grid_size:
+                    visual_obs[channel, vg_x, vg_y] = 255
+
+        fill_grid(0, self.visited_grid)
+        fill_grid(1, self.previous_cells)
+
+        for hp in hit_points:
+            if hp is not None:
+                gcx = int(hp.x // res)
+                gcy = int(hp.y // res)
+                self.obstacle_grid.add((gcx, gcy))
+
+        fill_grid(2, self.obstacle_grid)
+
+        return {
+            "visual": visual_obs,
+            "sensors": sensor_obs,
+        }
+
+    def _calculate_ray_distance(self, ray, origin):
+        boundary = self.field.boundary
+        intersection = ray.intersection(boundary)
+
+        if intersection.is_empty:
+            return self.max_ray_dist, None
+        if isinstance(intersection, Point):
+            return origin.distance(intersection), intersection
+        try:
+            pts = list(intersection.geoms)
+            closest = min(pts, key=lambda pt: origin.distance(pt))
+            return origin.distance(closest), closest
+        except AttributeError:
+            return self.max_ray_dist, None
+
+    def _update_coverage(self):
+        body_poly = self._get_agent_polygon()
+        minx, miny, maxx, maxy = body_poly.bounds
+        grid_minx = int(minx // self.grid_resolution)
+        grid_maxx = int(maxx // self.grid_resolution)
+        grid_miny = int(miny // self.grid_resolution)
+        grid_maxy = int(maxy // self.grid_resolution)
+
+        current_cells = set()
+        for i in range(grid_minx, grid_maxx + 1):
+            for j in range(grid_miny, grid_maxy + 1):
+                cx = (i + 0.5) * self.grid_resolution
+                cy = (j + 0.5) * self.grid_resolution
+                if body_poly.contains(Point(cx, cy)):
+                    current_cells.add((i, j))
+
+        entered_cells = current_cells - self.previous_cells
+        self.previous_cells = current_cells
+        return entered_cells
+
+    def _to_pygame(self, x, y):
+        """Converts standard Cartesian math coordinates to Pygame Screen coordinates."""
+        px = int((x - self.render_offset_x) * self.render_scale)
+        py = int(self.window_size - (y - self.render_offset_y) * self.render_scale)
+        return px, py
+
+    def render(self):
+        if self.render_mode is None:
+            return
+
+        if self.window is None:
+            if not pygame.get_init():
+                pygame.init()
+            if self.render_mode == "human":
+                pygame.display.init()
+                self.window = pygame.display.set_mode(
+                    (self.window_size, self.window_size)
+                )
+                pygame.display.set_caption("Robot Coverage Agent")
+            else:
+                self.window = pygame.Surface((self.window_size, self.window_size))
+
+        canvas = pygame.Surface((self.window_size, self.window_size))
+        canvas.fill((255, 255, 255))
+
+        ex_points = [self._to_pygame(x, y) for x, y in self.field.exterior.coords]
+        pygame.draw.polygon(canvas, (220, 220, 220), ex_points)
+
+        rect_size = max(1, int(self.grid_resolution * self.render_scale))
+        for gx, gy in self.visited_grid:
+            px = gx * self.grid_resolution
+            py = (gy + 1) * self.grid_resolution
+            pg_coords = self._to_pygame(px, py)
+            pygame.draw.rect(
+                canvas,
+                (100, 220, 100),
+                (pg_coords[0], pg_coords[1], rect_size, rect_size),
+            )
+
+        pygame.draw.polygon(canvas, (0, 0, 0), ex_points, 3)
+        for interior in self.field.interiors:
+            in_points = [self._to_pygame(x, y) for x, y in interior.coords]
+            pygame.draw.polygon(canvas, (255, 255, 255), in_points)
+            pygame.draw.polygon(canvas, (255, 0, 0), in_points, 2)
+
+        body = self._get_agent_polygon()
+        body_points = [self._to_pygame(x, y) for x, y in body.exterior.coords]
+        pygame.draw.polygon(canvas, (50, 50, 200), body_points)
+
+        hx = self.agent_pos[0] + (self.a / 2) * math.cos(self.agent_theta)
+        hy = self.agent_pos[1] + (self.a / 2) * math.sin(self.agent_theta)
+        pygame.draw.line(
+            canvas,
+            (0, 255, 0),
+            self._to_pygame(*self.agent_pos),
+            self._to_pygame(hx, hy),
+            3,
+        )
+
+        a, b = self.a, self.b
+        theta = self.agent_theta
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+
+        def local_to_global_pt(lx, ly):
+            return (
+                self.agent_pos[0] + lx * cos_t - ly * sin_t,
+                self.agent_pos[1] + lx * sin_t + ly * cos_t,
+            )
+
+        origins = [
+            local_to_global_pt(a / 2, b / 2),
+            local_to_global_pt(a / 2, 0),
+            local_to_global_pt(a / 2, -b / 2),
+        ]
+        angles = [math.pi / 4, 0.0, -math.pi / 4]
+        colors = [(255, 165, 0), (0, 255, 200), (255, 165, 0)]
+
+        for origin, ang_off, color in zip(origins, angles, colors):
+            ang = theta + ang_off
+            end = (
+                origin[0] + math.cos(ang) * self.max_ray_dist,
+                origin[1] + math.sin(ang) * self.max_ray_dist,
+            )
+            pygame.draw.line(
+                canvas,
+                color,
+                self._to_pygame(*origin),
+                self._to_pygame(*end),
+                1,
+            )
+            pygame.draw.circle(canvas, color, self._to_pygame(*origin), 3)
+
+        if self.render_mode == "human":
+            pygame.event.pump()
+            if self.current_step % 4 == 0:
+                self.window.blit(canvas, canvas.get_rect())
+                pygame.display.flip()
+        elif self.render_mode == "rgb_array":
+            return np.transpose(
+                np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
+            )
+
+    def close_display(self):
+        """Safely closes only the Pygame window, leaving the core environment intact."""
+        if self.window is not None:
+            if self.render_mode == "human":
+                pygame.display.quit()
+            self.window = None
+
+    def close(self):
+        """Full teardown for the end of the script."""
+        self.close_display()
+        if pygame.get_init():
+            pygame.quit()
