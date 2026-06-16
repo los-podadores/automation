@@ -35,9 +35,9 @@ def main():
                 if terminated or truncated:
                     break
 
-            coverage = env.unwrapped.visited_grid
+            coverage = int(env.unwrapped.visited_grid.sum())
             print(
-                f"Episode {ep + 1}: {steps} steps | {len(coverage)} cells covered | reward {total_reward:.1f}"
+                f"Episode {ep + 1}: {steps} steps | {coverage} cells covered | reward {total_reward:.1f}"
             )
 
             env.close_display()

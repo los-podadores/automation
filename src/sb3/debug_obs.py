@@ -2,14 +2,14 @@ import numpy as np
 import pygame
 from robot_env import RobotCoverageEnv
 
-CHANNEL_LABELS = ["Obstacles", "Visited", "Frontiers"]
-CHANNEL_COLORS = [(255, 80, 80), (100, 220, 100), (80, 160, 255)]
+CHANNEL_LABELS = ["Obstacles", "Visited"]
+CHANNEL_COLORS = [(255, 80, 80), (100, 220, 100)]
 CELL_PX = 12
 GRID_SIZE = 64
 GRID_PX = CELL_PX * GRID_SIZE
 MARGIN = 40
 ENV_WINDOW = 800
-OBS_PANEL_W = GRID_PX * 3 + MARGIN * 4
+OBS_PANEL_W = GRID_PX * 2 + MARGIN * 3
 WINDOW_W = ENV_WINDOW + OBS_PANEL_W
 WINDOW_H = max(ENV_WINDOW, GRID_PX + MARGIN * 2)
 
@@ -30,7 +30,7 @@ def draw_obs_panel(surface, visual_obs, font):
     title = font.render("Visual Observation Channels", True, (220, 220, 220))
     surface.blit(title, (panel_x + MARGIN, 10))
 
-    for ch in range(3):
+    for ch in range(2):
         x0 = panel_x + MARGIN + ch * (GRID_PX + MARGIN)
         y0 = MARGIN + 10
 

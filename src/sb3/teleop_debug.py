@@ -6,7 +6,6 @@ import pygame
 from robot_env import (
     REWARD_BASE_PENALTY,
     REWARD_FORWARD,
-    REWARD_FRONTIER_BREADCRUMB,
     ROBOT_SPEED_V,
     RobotCoverageEnv,
 )
@@ -42,8 +41,8 @@ RAY_COLORS = [
     (100, 100, 255),
     (200, 200, 200),
 ]
-CHANNEL_NAMES = ["Obstacles", "Visited", "Frontiers"]
-CHANNEL_COLORS = [(255, 80, 80), (100, 220, 100), (80, 160, 255)]
+CHANNEL_NAMES = ["Obstacles", "Visited"]
+CHANNEL_COLORS = [(255, 80, 80), (100, 220, 100)]
 
 
 def draw_text(surface, text, x, y, font, color=(220, 220, 220)):
@@ -55,15 +54,6 @@ def draw_bar(surface, x, y, w, h, value, max_val, color, bg=(50, 50, 50)):
     fill_w = max(0, min(w, int(w * value / max_val)))
     pygame.draw.rect(surface, color, (x, y, fill_w, h))
     pygame.draw.rect(surface, (100, 100, 100), (x, y, w, h), 1)
-
-
-def draw_channel(surface, channel_data, x0, y0, color):
-    flipped = np.fliplr(np.flipud(channel_data))
-    for gy in range(GRID_SIZE):
-        for gx in range(GRID_SIZE):
-            if flipped[gy, gx] > 0:
-                rect = (x0 + gx * CELL_PX, y0 + gy * CELL_PX, CELL_PX, CELL_PX)
-                pygame.draw.rect(surface, color, rect)
 
 
 def draw_env_view(surface, env, x0, y0):
@@ -86,26 +76,24 @@ def draw_env_view(surface, env, x0, y0):
     ex_points = [to_screen(x, y) for x, y in env.field.exterior.coords]
     pygame.draw.polygon(canvas, (220, 220, 220), ex_points)
 
-    for gx, gy in env.visited_grid:
-        px = gx * env.grid_resolution
-        py = (gy + 1) * env.grid_resolution
+    ox, oy = env.grid_origin
+    res = env.grid_resolution
+    vis_cells = np.argwhere(env.visited_grid)
+    for idx in vis_cells:
+        gx, gy = int(idx[0]), int(idx[1])
+        px = gx * res + ox
+        py = (gy + 1) * res + oy
         pg = to_screen(px, py)
-        rect_size = max(1, int(env.grid_resolution * scale))
+        rect_size = max(1, int(res * scale))
         pygame.draw.rect(canvas, (80, 160, 80), (pg[0], pg[1], rect_size, rect_size))
 
-    frontiers = env._get_frontiers()
-    for gx, gy in frontiers:
-        px = gx * env.grid_resolution
-        py = (gy + 1) * env.grid_resolution
+    obs_cells = np.argwhere(env.obstacle_grid)
+    for idx in obs_cells:
+        gx, gy = int(idx[0]), int(idx[1])
+        px = gx * res + ox
+        py = (gy + 1) * res + oy
         pg = to_screen(px, py)
-        rect_size = max(1, int(env.grid_resolution * scale))
-        pygame.draw.rect(canvas, (80, 120, 220), (pg[0], pg[1], rect_size, rect_size))
-
-    for gx, gy in env.obstacle_grid:
-        px = gx * env.grid_resolution
-        py = (gy + 1) * env.grid_resolution
-        pg = to_screen(px, py)
-        rect_size = max(1, int(env.grid_resolution * scale))
+        rect_size = max(1, int(res * scale))
         pygame.draw.rect(canvas, (200, 80, 80), (pg[0], pg[1], rect_size, rect_size))
 
     pygame.draw.polygon(canvas, (0, 0, 0), ex_points, 2)
@@ -300,40 +288,17 @@ def main():
         draw_text(screen, f" forward:      {r_fwd:+.4f}", panel_x + 10, y, font_sm, (120, 255, 120))
         y += 15
 
-        if env._is_in_visited_cell():
-            frontiers = env._get_frontiers()
-            if frontiers and env.prev_frontier_dist is not None:
-                fd = []
-                for fx, fy in frontiers:
-                    wx = (fx + 0.5) * env.grid_resolution
-                    wy = (fy + 0.5) * env.grid_resolution
-                    fd.append(math.hypot(env.agent_pos[0] - wx, env.agent_pos[1] - wy))
-                cur_dist = min(fd)
-                if cur_dist < env.prev_frontier_dist:
-                    draw_text(screen, f" frontier_brd: +{REWARD_FRONTIER_BREADCRUMB:.4f}", panel_x + 10, y, font_sm, (120, 180, 255))
-                    total += REWARD_FRONTIER_BREADCRUMB
-                else:
-                    draw_text(screen, " frontier_brd: +0.0000", panel_x + 10, y, font_sm, (100, 100, 100))
-            else:
-                draw_text(screen, " frontier_brd: +0.0000", panel_x + 10, y, font_sm, (100, 100, 100))
-        else:
-            draw_text(screen, " frontier_brd: +0.0000 (not in visited)", panel_x + 10, y, font_sm, (100, 100, 100))
-        y += 15
-
         draw_text(screen, f" TOTAL:        {total:+.4f}", panel_x + 10, y, font_md, (255, 255, 180))
         y += 24
 
         draw_text(screen, "COVERAGE:", panel_x + 10, y, font_md, (180, 200, 255))
         y += 18
-        total_cells = env._get_total_cells()
-        visited = len(env.visited_grid)
-        frontiers = env._get_frontiers()
-        obstacles = len(env.obstacle_grid)
+        total_cells = env.total_cells
+        visited = int(env.visited_grid.sum())
+        obstacles = int(env.obstacle_grid.sum())
         pct = visited / total_cells * 100 if total_cells > 0 else 0
 
         draw_text(screen, f" visited:   {visited} / {total_cells} ({pct:.1f}%)", panel_x + 10, y, font_sm, (100, 220, 100))
-        y += 15
-        draw_text(screen, f" frontiers: {len(frontiers)}", panel_x + 10, y, font_sm, (80, 120, 220))
         y += 15
         draw_text(screen, f" obstacles: {obstacles}", panel_x + 10, y, font_sm, (200, 80, 80))
         y += 15
@@ -354,16 +319,14 @@ def main():
         y += 15
         draw_text(screen, f" theta: {math.degrees(env.agent_theta):.1f} deg", panel_x + 10, y, font_sm, (200, 200, 200))
         y += 15
-        draw_text(screen, f" in_visited: {env._is_in_visited_cell()}", panel_x + 10, y, font_sm, (200, 200, 200))
-        y += 15
         draw_text(screen, f" grid_res: {env.grid_resolution:.3f}", panel_x + 10, y, font_sm, (200, 200, 200))
         y += 24
 
         draw_text(screen, "VISUAL CHANNELS:", panel_x + 10, y, font_md, (180, 200, 255))
         y += 18
 
-        ch_w = (PANEL_W - 40) // 3
-        for ch in range(3):
+        ch_w = (PANEL_W - 40) // 2
+        for ch in range(2):
             cx = panel_x + 10 + ch * (ch_w + 5)
             draw_text(screen, CHANNEL_NAMES[ch], cx, y, font_sm, CHANNEL_COLORS[ch])
             sub = pygame.Surface((ch_w, ch_w))
