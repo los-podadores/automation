@@ -4,7 +4,7 @@ from robot_env import RobotCoverageEnv
 from stable_baselines3 import PPO
 
 MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "models", "ppo_robot_final.zip"
+    os.path.dirname(__file__), "..", "..", "models", "best_model.zip"
 )
 NUM_EPISODES = 20
 MAX_STEPS = 10000

@@ -11,19 +11,19 @@ from stable_baselines3.common.callbacks import (
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 
-LEARNING_RATE_INITIAL = 1e-3
+LEARNING_RATE_INITIAL = 3e-4
 N_STEPS = 2048
 BATCH_SIZE = 64
 N_EPOCHS = 10
-GAMMA = 0.98
+GAMMA = 0.99
 GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
 ENT_COEF = 0.01
-LOG_STD_INIT = 0.5
+LOG_STD_INIT = 0.0
 TOTAL_TIMESTEPS = 1_000_000
 N_ENVS = 16
-SAVE_FREQ = 50000
-EVAL_FREQ = 50000
+SAVE_FREQ = 250_000
+EVAL_FREQ = 250_000
 
 
 class CleanEvalCallback(EvalCallback):

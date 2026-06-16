@@ -13,9 +13,8 @@ REWARD_BASE_PENALTY = -0.02
 REWARD_CRASH_PENALTY = -40.0
 REWARD_NEW_COVERAGE = 0.055
 REWARD_FORWARD = 0.03
-REWARD_STRAIGHT_STEP = 0.015
-REWARD_STRAIGHT_CAP = 0.045
-ROTATION_THRESHOLD = 0.1
+REWARD_OBSTACLE_SIDE = 0.03
+OBSTACLE_SIDE_THRESHOLD = 0.5
 ROBOT_SPEED_V = 1.5
 ROBOT_SPEED_W = 1.0
 DT = 0.1
@@ -80,7 +79,6 @@ class RobotCoverageEnv(gym.Env):
         self.obstacle_grid = set()
         self.last_v = 0.0
         self.last_w = 0.0
-        self.straight_steps = 0
 
         self.grid_resolution = min(a, b) / 4.0
 
@@ -102,7 +100,6 @@ class RobotCoverageEnv(gym.Env):
         self.obstacle_grid.clear()
         self.last_v = 0.0
         self.last_w = 0.0
-        self.straight_steps = 0
 
         for _ in range(MAX_FIELD_ATTEMPTS):
             self.field = self._generate_random_field()
@@ -156,13 +153,13 @@ class RobotCoverageEnv(gym.Env):
 
         crashed = not self.field.contains(body_poly)
 
-        if abs(action[1]) < ROTATION_THRESHOLD:
-            self.straight_steps += 1
-        else:
-            self.straight_steps = 0
-
         reward = REWARD_BASE_PENALTY + REWARD_FORWARD * v
-        reward += min(self.straight_steps * REWARD_STRAIGHT_STEP, REWARD_STRAIGHT_CAP)
+
+        dists = obs["sensors"][:3]
+        one_active = sum(d < OBSTACLE_SIDE_THRESHOLD for d in dists) == 1
+        side_active = (dists[0] < OBSTACLE_SIDE_THRESHOLD) or (dists[2] < OBSTACLE_SIDE_THRESHOLD)
+        if one_active and side_active:
+            reward += REWARD_OBSTACLE_SIDE
         terminated = False
 
         if crashed:
