@@ -23,9 +23,9 @@ CLIP_RANGE = 0.2
 ENT_COEF = 0.01
 LOG_STD_INIT = 0.0
 TOTAL_TIMESTEPS = 1_000_000
-N_ENVS = 8
-SAVE_FREQ = 250_000
-EVAL_FREQ = 250_000
+N_ENVS = 16
+SAVE_FREQ = 200_000
+EVAL_FREQ = 200_000
 SUCCESS_THRESHOLD = 0.8
 WINDOW_SIZE = 50
 N_STACK = 4
@@ -83,6 +83,7 @@ def linear_schedule(initial_value: float) -> typing.Callable[[float], float]:
 def make_env(phase=1, render_mode=None):
     def _init():
         return RobotCoverageEnv(a=2.0, b=1.0, render_mode=render_mode, phase=phase)
+
     return _init
 
 

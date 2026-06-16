@@ -11,8 +11,8 @@ from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 MAX_STEPS = 15000
 REWARD_BASE_PENALTY = -0.02
 REWARD_CRASH_PENALTY = -40.0
-REWARD_NEW_COVERAGE = 0.055
-REWARD_FORWARD = 0.03
+REWARD_NEW_COVERAGE = 0.075
+REWARD_FORWARD = 0.0
 ROBOT_SPEED_V = 1.5
 ROBOT_SPEED_W = 1.0
 DT = 0.1
@@ -160,7 +160,10 @@ class RobotCoverageEnv(gym.Env):
         self._update_coverage()
 
         obs = self._get_observation()
-        info = {"coverage_cells": int(self.visited_grid.sum()), "total_cells": self.total_cells}
+        info = {
+            "coverage_cells": int(self.visited_grid.sum()),
+            "total_cells": self.total_cells,
+        }
 
         return obs, info
 
@@ -197,7 +200,10 @@ class RobotCoverageEnv(gym.Env):
 
         obs = self._get_observation()
         truncated = self.current_step >= self.max_steps
-        info = {"coverage_cells": int(self.visited_grid.sum()), "total_cells": self.total_cells}
+        info = {
+            "coverage_cells": int(self.visited_grid.sum()),
+            "total_cells": self.total_cells,
+        }
 
         return obs, float(reward), terminated, truncated, info
 

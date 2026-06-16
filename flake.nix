@@ -50,6 +50,9 @@
               pkg-config
               freetype
               sdl2-compat
+
+              gcc
+              cmake
             ];
           buildInputs = [ pkgs.bashInteractive ];
           env = {
