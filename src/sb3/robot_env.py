@@ -41,7 +41,9 @@ class RobotCoverageEnv(gym.Env):
         self.render_mode = render_mode
 
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0]), high=np.array([1.0, 1.0]), dtype=np.float32
+            low=np.array([-1.0, -1.0], dtype=np.float32),
+            high=np.array([1.0, 1.0], dtype=np.float32),
+            dtype=np.float32,
         )
 
         self.observation_space = spaces.Dict(
@@ -50,7 +52,9 @@ class RobotCoverageEnv(gym.Env):
                     low=0, high=255, shape=(3, 64, 64), dtype=np.uint8
                 ),
                 "sensors": spaces.Box(
-                    low=np.array([0.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0]),
+                    low=np.array(
+                        [0.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0], dtype=np.float32
+                    ),
                     high=np.array(
                         [
                             self.max_ray_dist,
@@ -60,7 +64,8 @@ class RobotCoverageEnv(gym.Env):
                             1.0,
                             1.0,
                             1.0,
-                        ]
+                        ],
+                        dtype=np.float32,
                     ),
                     dtype=np.float32,
                 ),
@@ -254,7 +259,12 @@ class RobotCoverageEnv(gym.Env):
             reachable += 1
             for di, dj in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 ni, nj = ci + di, cj + dj
-                if 0 <= ni < nx and 0 <= nj < ny and not visited[ni, nj] and grid[ni, nj]:
+                if (
+                    0 <= ni < nx
+                    and 0 <= nj < ny
+                    and not visited[ni, nj]
+                    and grid[ni, nj]
+                ):
                     visited[ni, nj] = True
                     queue.append((ni, nj))
 
