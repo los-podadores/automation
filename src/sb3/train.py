@@ -1,9 +1,11 @@
 import os
 import typing
+from collections import deque
 
 from robot_env import RobotCoverageEnv
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import (
+    BaseCallback,
     CallbackList,
     CheckpointCallback,
     EvalCallback,
@@ -21,9 +23,11 @@ CLIP_RANGE = 0.2
 ENT_COEF = 0.01
 LOG_STD_INIT = 0.0
 TOTAL_TIMESTEPS = 1_000_000
-N_ENVS = 16
+N_ENVS = 8
 SAVE_FREQ = 250_000
 EVAL_FREQ = 250_000
+SUCCESS_THRESHOLD = 0.8
+WINDOW_SIZE = 50
 
 
 class CleanEvalCallback(EvalCallback):
@@ -39,6 +43,35 @@ class CleanEvalCallback(EvalCallback):
         return result
 
 
+class CurriculumCallback(BaseCallback):
+    """Tracks 95% completion successes and increments phase when threshold met."""
+
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.success_window = deque(maxlen=WINDOW_SIZE)
+        self.current_phase = 1
+
+    def _on_step(self) -> bool:
+        for i, done in enumerate(self.locals.get("dones", [])):
+            if done:
+                info = self.locals["infos"][i]
+                coverage = info.get("coverage_cells", 0)
+                total = info.get("total_cells", 1)
+                success = coverage > 0.95 * total if total > 1 else False
+                self.success_window.append(success)
+
+        if len(self.success_window) >= WINDOW_SIZE:
+            success_rate = sum(self.success_window) / len(self.success_window)
+            if success_rate >= SUCCESS_THRESHOLD and self.current_phase < 3:
+                self.current_phase += 1
+                self.training_env.env_method("set_phase", self.current_phase)
+                if self.verbose > 0:
+                    print(f"Curriculum: Advancing to phase {self.current_phase}")
+                self.success_window.clear()
+
+        return True
+
+
 def linear_schedule(initial_value: float) -> typing.Callable[[float], float]:
     def func(progress_remaining: float) -> float:
         return progress_remaining * initial_value
@@ -50,20 +83,20 @@ def main():
     print("Initializing training environments...")
     env = DummyVecEnv(
         [
-            lambda: RobotCoverageEnv(a=2.0, b=1.0, render_mode=None)
+            lambda: RobotCoverageEnv(a=2.0, b=1.0, render_mode=None, phase=1)
             for _ in range(N_ENVS)
         ]
     )
     env = VecMonitor(env)
 
-    check_env(RobotCoverageEnv(a=2.0, b=1.0, render_mode=None), warn=True)
+    check_env(RobotCoverageEnv(a=2.0, b=1.0, render_mode=None, phase=1), warn=True)
 
     log_dir = "./logs/robot_coverage/"
     model_dir = "./models/"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    model = PPO(
+    model = RecurrentPPO(
         policy="MultiInputPolicy",
         env=env,
         learning_rate=linear_schedule(LEARNING_RATE_INITIAL),
@@ -80,11 +113,11 @@ def main():
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="ppo_robot"
+        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="rppo_robot"
     )
 
     eval_env = DummyVecEnv(
-        [lambda: RobotCoverageEnv(a=2.0, b=1.0, render_mode="rgb_array")]
+        [lambda: RobotCoverageEnv(a=2.0, b=1.0, render_mode="rgb_array", phase=1)]
     )
     eval_env = VecMonitor(eval_env)
 
@@ -97,11 +130,15 @@ def main():
         render=True,
     )
 
-    callback_list = CallbackList([checkpoint_callback, eval_callback])
+    curriculum_callback = CurriculumCallback(verbose=1)
+
+    callback_list = CallbackList(
+        [checkpoint_callback, eval_callback, curriculum_callback]
+    )
 
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback_list)
 
-    final_model_path = os.path.join(model_dir, "ppo_robot_final")
+    final_model_path = os.path.join(model_dir, "rppo_robot_final")
     model.save(final_model_path)
 
     eval_env.close()

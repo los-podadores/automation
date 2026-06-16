@@ -8,19 +8,22 @@ from gymnasium import spaces
 from shapely.affinity import rotate, translate
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
-MAX_STEPS = 10000
+MAX_STEPS = 15000
 REWARD_BASE_PENALTY = -0.02
 REWARD_CRASH_PENALTY = -40.0
 REWARD_NEW_COVERAGE = 0.055
 REWARD_FORWARD = 0.03
-REWARD_OBSTACLE_SIDE = 0.03
-OBSTACLE_SIDE_THRESHOLD = 0.5
+REWARD_FRONTIER_BREADCRUMB = 0.005
 ROBOT_SPEED_V = 1.5
 ROBOT_SPEED_W = 1.0
 DT = 0.1
-OBST_MIN = 10
-OBST_MAX = 15
 MAX_FIELD_ATTEMPTS = 100
+
+PHASE_RULES = {
+    1: {"radii_bounds": (10.0, 15.0), "obst_range": (0, 0)},
+    2: {"radii_bounds": (15.0, 20.0), "obst_range": (5, 10)},
+    3: {"radii_bounds": (20.0, 30.0), "obst_range": (15, 25)},
+}
 
 
 class RobotCoverageEnv(gym.Env):
@@ -31,13 +34,14 @@ class RobotCoverageEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
-    def __init__(self, a=2.0, b=1.0, render_mode=None):
+    def __init__(self, a=2.0, b=1.0, render_mode=None, phase=1):
         super(RobotCoverageEnv, self).__init__()
 
         self.a = a
         self.b = b
         self.max_ray_dist = b + 0.05
         self.render_mode = render_mode
+        self.phase = phase
 
         self.action_space = spaces.Box(
             low=np.array([-1.0, -1.0], dtype=np.float32),
@@ -52,13 +56,18 @@ class RobotCoverageEnv(gym.Env):
                 ),
                 "sensors": spaces.Box(
                     low=np.array(
-                        [0.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0], dtype=np.float32
+                        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0],
+                        dtype=np.float32,
                     ),
                     high=np.array(
                         [
                             self.max_ray_dist,
                             self.max_ray_dist,
                             self.max_ray_dist,
+                            self.max_ray_dist,
+                            self.max_ray_dist,
+                            self.max_ray_dist,
+                            1.0,
                             1.0,
                             1.0,
                             1.0,
@@ -75,10 +84,10 @@ class RobotCoverageEnv(gym.Env):
         self.agent_pos = None
         self.agent_theta = 0.0
         self.visited_grid = set()
-        self.previous_cells = set()
         self.obstacle_grid = set()
         self.last_v = 0.0
         self.last_w = 0.0
+        self.prev_frontier_dist = None
 
         self.grid_resolution = min(a, b) / 4.0
 
@@ -96,10 +105,10 @@ class RobotCoverageEnv(gym.Env):
         super().reset(seed=seed)
         self.current_step = 0
         self.visited_grid.clear()
-        self.previous_cells.clear()
         self.obstacle_grid.clear()
         self.last_v = 0.0
         self.last_w = 0.0
+        self.prev_frontier_dist = None
 
         for _ in range(MAX_FIELD_ATTEMPTS):
             self.field = self._generate_random_field()
@@ -155,11 +164,6 @@ class RobotCoverageEnv(gym.Env):
 
         reward = REWARD_BASE_PENALTY + REWARD_FORWARD * v
 
-        dists = obs["sensors"][:3]
-        one_active = sum(d < OBSTACLE_SIDE_THRESHOLD for d in dists) == 1
-        side_active = (dists[0] < OBSTACLE_SIDE_THRESHOLD) or (dists[2] < OBSTACLE_SIDE_THRESHOLD)
-        if one_active and side_active:
-            reward += REWARD_OBSTACLE_SIDE
         terminated = False
 
         if crashed:
@@ -172,15 +176,40 @@ class RobotCoverageEnv(gym.Env):
                     self.visited_grid.add(cell)
                     reward += REWARD_NEW_COVERAGE
 
+            frontiers = self._get_frontiers()
+            if frontiers:
+                frontier_dists = []
+                for fx, fy in frontiers:
+                    wx = (fx + 0.5) * self.grid_resolution
+                    wy = (fy + 0.5) * self.grid_resolution
+                    dist = math.hypot(self.agent_pos[0] - wx, self.agent_pos[1] - wy)
+                    frontier_dists.append(dist)
+                min_frontier_dist = min(frontier_dists)
+
+                if self.prev_frontier_dist is not None:
+                    in_visited = self._is_in_visited_cell()
+                    if min_frontier_dist < self.prev_frontier_dist and in_visited:
+                        reward += REWARD_FRONTIER_BREADCRUMB
+
+                self.prev_frontier_dist = min_frontier_dist
+
+            total_cells = self._get_total_cells()
+            if len(self.visited_grid) > 0.95 * total_cells:
+                terminated = True
+
         truncated = self.current_step >= self.max_steps
         info = {"coverage_cells": len(self.visited_grid)}
 
         return obs, float(reward), terminated, truncated, info
 
     def _generate_random_field(self):
+        phase_rule = PHASE_RULES[self.phase]
+        radii_low, radii_high = phase_rule["radii_bounds"]
+        obst_min, obst_max = phase_rule["obst_range"]
+
         while True:
             angles = np.sort(self.np_random.uniform(0, 2 * np.pi, 12))
-            radii = self.np_random.uniform(15.0, 25.0, 12)
+            radii = self.np_random.uniform(radii_low, radii_high, 12)
 
             points = [
                 (r * math.cos(ang), r * math.sin(ang)) for r, ang in zip(radii, angles)
@@ -188,7 +217,9 @@ class RobotCoverageEnv(gym.Env):
             outer_field = Polygon(points)
             outer_field = outer_field.buffer(2.0).simplify(1.0)
 
-            num_obstacles = self.np_random.integers(OBST_MIN, OBST_MAX)
+            num_obstacles = (
+                self.np_random.integers(obst_min, obst_max + 1) if obst_max > 0 else 0
+            )
             obstacles = []
             for _ in range(num_obstacles):
                 ox = self.np_random.uniform(
@@ -279,7 +310,7 @@ class RobotCoverageEnv(gym.Env):
             x1, y1 = boundary_coords[edge_idx]
             x2, y2 = boundary_coords[(edge_idx + 1) % num_edges]
 
-            t = self.np_random.uniform(0.25, 0.75)
+            t = self.np_random.uniform(0.25, 0.25)
             px = x1 + t * (x2 - x1)
             py = y1 + t * (y2 - y1)
 
@@ -293,7 +324,7 @@ class RobotCoverageEnv(gym.Env):
             if nx * (inward.x - px) + ny * (inward.y - py) < 0:
                 nx, ny = -nx, -ny
 
-            spawn_dist = self.a * 1.2
+            spawn_dist = self.a
             x = px + nx * spawn_dist
             y = py + ny * spawn_dist
 
@@ -305,7 +336,7 @@ class RobotCoverageEnv(gym.Env):
             body_poly = self._get_agent_polygon()
             if self.field.contains(body_poly):
                 obs = self._get_observation()
-                if all(d > 1.0 for d in obs["sensors"][:3]):
+                if all(d > 1.0 for d in obs["sensors"][:6]):
                     return (x, y), theta
 
     def _get_agent_polygon(self):
@@ -316,6 +347,50 @@ class RobotCoverageEnv(gym.Env):
         rect = rotate(rect, self.agent_theta, use_radians=True, origin=(0, 0))
         rect = translate(rect, self.agent_pos[0], self.agent_pos[1])
         return rect
+
+    def _get_frontiers(self):
+        frontier = set()
+        for gx, gy in self.visited_grid:
+            for dx, dy in [
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+            ]:
+                neighbor = (gx + dx, gy + dy)
+                if neighbor not in self.visited_grid:
+                    wx = (neighbor[0] + 0.5) * self.grid_resolution
+                    wy = (neighbor[1] + 0.5) * self.grid_resolution
+                    if self.field.contains(Point(wx, wy)):
+                        frontier.add(neighbor)
+        return frontier
+
+    def _get_total_cells(self):
+        erosion = self.b / 2.0
+        nav_field = self.field.buffer(-erosion)
+        if nav_field.is_empty:
+            return 1
+        minx, miny, maxx, maxy = nav_field.bounds
+        res = self.grid_resolution
+        count = 0
+        x = minx
+        while x < maxx:
+            y = miny
+            while y < maxy:
+                if nav_field.contains(Point(x + res / 2, y + res / 2)):
+                    count += 1
+                y += res
+            x += res
+        return max(count, 1)
+
+    def _is_in_visited_cell(self):
+        gx = int(self.agent_pos[0] // self.grid_resolution)
+        gy = int(self.agent_pos[1] // self.grid_resolution)
+        return (gx, gy) in self.visited_grid
 
     def _get_observation(self):
         a, b = self.a, self.b
@@ -335,8 +410,11 @@ class RobotCoverageEnv(gym.Env):
             local_to_global(a / 2, b / 2),
             local_to_global(a / 2, 0),
             local_to_global(a / 2, -b / 2),
+            local_to_global(0, b / 2),
+            local_to_global(0, -b / 2),
+            local_to_global(-a / 2, 0),
         ]
-        angles = [math.pi / 4, 0.0, -math.pi / 4]
+        angles = [math.pi / 4, 0.0, -math.pi / 4, math.pi / 2, -math.pi / 2, math.pi]
 
         dists = []
         hit_points = []
@@ -351,13 +429,23 @@ class RobotCoverageEnv(gym.Env):
             dists.append(dist)
             hit_points.append(hit)
 
+        min_front = min(dists[0], dists[1], dists[2]) / self.max_ray_dist
+        asymmetry = (dists[0] - dists[2]) / self.max_ray_dist
+        center_d = dists[1]
+        min_front_raw = min(dists[0], dists[1], dists[2])
+        wall_angle = math.atan2(dists[0] - dists[2], center_d - min_front_raw) / math.pi
+
         sensor_obs = np.array(
             [
                 dists[0],
                 dists[1],
                 dists[2],
-                math.cos(theta),
-                math.sin(theta),
+                dists[3],
+                dists[4],
+                dists[5],
+                min_front,
+                asymmetry,
+                wall_angle,
                 self.last_v,
                 self.last_w,
             ],
@@ -385,16 +473,15 @@ class RobotCoverageEnv(gym.Env):
                 if 0 <= vg_x < grid_size and 0 <= vg_y < grid_size:
                     visual_obs[channel, vg_x, vg_y] = 255
 
-        fill_grid(0, self.visited_grid)
-        fill_grid(1, self.previous_cells)
-
         for hp in hit_points:
             if hp is not None:
                 gcx = int(hp.x // res)
                 gcy = int(hp.y // res)
                 self.obstacle_grid.add((gcx, gcy))
 
-        fill_grid(2, self.obstacle_grid)
+        fill_grid(0, self.obstacle_grid)
+        fill_grid(1, self.visited_grid)
+        fill_grid(2, self._get_frontiers())
 
         return {
             "visual": visual_obs,
@@ -432,8 +519,7 @@ class RobotCoverageEnv(gym.Env):
                 if body_poly.contains(Point(cx, cy)):
                     current_cells.add((i, j))
 
-        entered_cells = current_cells - self.previous_cells
-        self.previous_cells = current_cells
+        entered_cells = current_cells - self.visited_grid
         return entered_cells
 
     def _to_pygame(self, x, y):
@@ -510,9 +596,19 @@ class RobotCoverageEnv(gym.Env):
             local_to_global_pt(a / 2, b / 2),
             local_to_global_pt(a / 2, 0),
             local_to_global_pt(a / 2, -b / 2),
+            local_to_global_pt(0, b / 2),
+            local_to_global_pt(0, -b / 2),
+            local_to_global_pt(-a / 2, 0),
         ]
-        angles = [math.pi / 4, 0.0, -math.pi / 4]
-        colors = [(255, 165, 0), (0, 255, 200), (255, 165, 0)]
+        angles = [math.pi / 4, 0.0, -math.pi / 4, math.pi / 2, -math.pi / 2, math.pi]
+        colors = [
+            (255, 165, 0),
+            (0, 255, 200),
+            (255, 165, 0),
+            (100, 100, 255),
+            (100, 100, 255),
+            (200, 200, 200),
+        ]
 
         for origin, ang_off, color in zip(origins, angles, colors):
             ang = theta + ang_off
@@ -538,6 +634,9 @@ class RobotCoverageEnv(gym.Env):
             return np.transpose(
                 np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
+
+    def set_phase(self, phase):
+        self.phase = phase
 
     def close_display(self):
         """Safely closes only the Pygame window, leaving the core environment intact."""

@@ -2,8 +2,8 @@ import numpy as np
 import pygame
 from robot_env import RobotCoverageEnv
 
-CHANNEL_LABELS = ["Visited", "Current", "Observed"]
-CHANNEL_COLORS = [(100, 220, 100), (80, 160, 255), (255, 80, 80)]
+CHANNEL_LABELS = ["Obstacles", "Visited", "Frontiers"]
+CHANNEL_COLORS = [(255, 80, 80), (100, 220, 100), (80, 160, 255)]
 CELL_PX = 12
 GRID_SIZE = 64
 GRID_PX = CELL_PX * GRID_SIZE
