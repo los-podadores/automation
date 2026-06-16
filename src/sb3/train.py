@@ -3,7 +3,7 @@ import typing
 from collections import deque
 
 from robot_env import RobotCoverageEnv
-from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
@@ -11,7 +11,7 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
 )
 from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack, VecMonitor
 
 LEARNING_RATE_INITIAL = 3e-4
 N_STEPS = 2048
@@ -28,6 +28,7 @@ SAVE_FREQ = 250_000
 EVAL_FREQ = 250_000
 SUCCESS_THRESHOLD = 0.8
 WINDOW_SIZE = 50
+N_STACK = 4
 
 
 class CleanEvalCallback(EvalCallback):
@@ -79,14 +80,16 @@ def linear_schedule(initial_value: float) -> typing.Callable[[float], float]:
     return func
 
 
+def make_env(phase=1, render_mode=None):
+    def _init():
+        return RobotCoverageEnv(a=2.0, b=1.0, render_mode=render_mode, phase=phase)
+    return _init
+
+
 def main():
     print("Initializing training environments...")
-    env = DummyVecEnv(
-        [
-            lambda: RobotCoverageEnv(a=2.0, b=1.0, render_mode=None, phase=1)
-            for _ in range(N_ENVS)
-        ]
-    )
+    env = DummyVecEnv([make_env(phase=1) for _ in range(N_ENVS)])
+    env = VecFrameStack(env, n_stack=N_STACK)
     env = VecMonitor(env)
 
     check_env(RobotCoverageEnv(a=2.0, b=1.0, render_mode=None, phase=1), warn=True)
@@ -96,7 +99,7 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    model = RecurrentPPO(
+    model = PPO(
         policy="MultiInputPolicy",
         env=env,
         learning_rate=linear_schedule(LEARNING_RATE_INITIAL),
@@ -113,12 +116,11 @@ def main():
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="rppo_robot"
+        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="ppo_robot"
     )
 
-    eval_env = DummyVecEnv(
-        [lambda: RobotCoverageEnv(a=2.0, b=1.0, render_mode="rgb_array", phase=1)]
-    )
+    eval_env = DummyVecEnv([make_env(phase=1, render_mode="rgb_array")])
+    eval_env = VecFrameStack(eval_env, n_stack=N_STACK)
     eval_env = VecMonitor(eval_env)
 
     eval_callback = CleanEvalCallback(
@@ -138,7 +140,7 @@ def main():
 
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback_list)
 
-    final_model_path = os.path.join(model_dir, "rppo_robot_final")
+    final_model_path = os.path.join(model_dir, "ppo_robot_final")
     model.save(final_model_path)
 
     eval_env.close()
