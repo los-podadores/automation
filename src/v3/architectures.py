@@ -66,11 +66,17 @@ class StackedMapFeaturesExtractor(BaseFeaturesExtractor):
         frontier = observations["frontier"]
         sensors = observations["sensors"]
 
+        # cat gives (B, num_map_types*num_maps, W, H) with channels ordered as
+        # [cov_s0, cov_s1, cov_s2, obs_s0, obs_s1, obs_s2, fro_s0, fro_s1, fro_s2]
         maps = th.cat([coverage, obstacles, frontier], dim=1)
 
+        # Reorder so channels at the same scale are consecutive (grouped convs
+        # require each group to see all map types at one spatial resolution):
+        # [cov_s0, obs_s0, fro_s0, cov_s1, obs_s1, fro_s1, cov_s2, obs_s2, fro_s2]
         b, _, w, h = maps.shape
         num_maps = maps.shape[1] // 3
-        maps = maps.reshape(b, num_maps, 3, w, h)
+        maps = maps.reshape(b, 3, num_maps, w, h)
+        maps = maps.permute(0, 2, 1, 3, 4)
         maps = maps.reshape(b, num_maps * 3, w, h)
 
         map_features = self.map_extractor(maps)

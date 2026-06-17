@@ -1,6 +1,8 @@
 import os
 from collections import deque
 
+import numpy as np
+
 from architectures import StackedMapFeaturesExtractor
 from robot_env import (
     MAP_SIZE,
@@ -9,7 +11,7 @@ from robot_env import (
     SENSOR_DIM,
     RobotCoverageEnv,
 )
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
@@ -20,18 +22,26 @@ from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
-LEARNING_RATE = 2e-5
-BATCH_SIZE = 256
-GAMMA = 0.99
-TOTAL_TIMESTEPS = 8_000_000
-SAVE_FREQ = 200_000
-EVAL_FREQ = 200_000
+LEARNING_RATE = 3e-4
+TOTAL_TIMESTEPS = 2_000_000
 CNN_DIMS = 256
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
-BUFFER_SIZE = 500_000
-TRAIN_FREQ = 1
-GRADIENT_STEPS = 1
+NUM_ENVS = 16
+N_STEPS = 2048
+
+# Callback freqs are measured in env.step() calls (one per vectorized batch),
+# not individual timesteps. Divide target timestep interval by NUM_ENVS.
+SAVE_FREQ = 200_000 // NUM_ENVS
+EVAL_FREQ = 200_000 // NUM_ENVS
+N_EPOCHS = 4
+GAMMA = 0.99
+GAE_LAMBDA = 0.95
+CLIP_RANGE = 0.2
+ENT_COEF = 0.01
+VF_COEF = 0.5
+MAX_GRAD_NORM = 0.5
+BATCH_SIZE = 512
 
 
 class CurriculumCallback(BaseCallback):
@@ -41,12 +51,17 @@ class CurriculumCallback(BaseCallback):
         self.current_phase = 1
 
     def _on_step(self) -> bool:
+        coverages = []
         for i, done in enumerate(self.locals.get("dones", [])):
             if done:
                 info = self.locals["infos"][i]
                 cov = info.get("coverage_percent", 0.0)
+                coverages.append(cov)
                 goal = PHASES[self.current_phase]["goal"]
                 self.success_window.append(cov >= goal)
+
+        if coverages:
+            self.logger.record("field/coverage_mean", np.mean(coverages))
 
         if len(self.success_window) >= SUCCESS_WINDOW:
             rate = sum(self.success_window) / len(self.success_window)
@@ -57,13 +72,19 @@ class CurriculumCallback(BaseCallback):
                 if self.verbose > 0:
                     print(f"Curriculum: advancing to phase {self.current_phase}")
 
+        self.logger.record("curriculum/phase", self.current_phase)
+        if len(self.success_window) >= SUCCESS_WINDOW:
+            self.logger.record("curriculum/success_rate", sum(self.success_window) / len(self.success_window))
+
         return True
 
 
 def make_env(phase=1, render_mode=None):
     def _init():
         env = RobotCoverageEnv(render_mode=render_mode, phase=phase)
-        env = Monitor(env, info_keywords=("coverage_percent", "num_collisions", "phase"))
+        env = Monitor(
+            env, info_keywords=("coverage_percent", "num_collisions", "phase")
+        )
         return env
 
     return _init
@@ -71,7 +92,7 @@ def make_env(phase=1, render_mode=None):
 
 def main():
     print("Initializing training environments...")
-    env = SubprocVecEnv([make_env(phase=1) for _ in range(1)])
+    env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
     check_env(RobotCoverageEnv(phase=1), warn=True)
 
     log_dir = "./logs/v3/"
@@ -88,25 +109,29 @@ def main():
             sensor_dim=SENSOR_DIM,
             num_map_types=3,
         ),
-        net_arch=dict(pi=[CNN_DIMS, CNN_DIMS], qf=[CNN_DIMS, CNN_DIMS]),
+        net_arch=dict(pi=[CNN_DIMS, CNN_DIMS], vf=[CNN_DIMS, CNN_DIMS]),
     )
 
-    model = SAC(
+    model = PPO(
         policy="MultiInputPolicy",
         env=env,
         learning_rate=LEARNING_RATE,
+        n_steps=N_STEPS,
         batch_size=BATCH_SIZE,
+        n_epochs=N_EPOCHS,
         gamma=GAMMA,
-        buffer_size=BUFFER_SIZE,
-        train_freq=TRAIN_FREQ,
-        gradient_steps=GRADIENT_STEPS,
+        gae_lambda=GAE_LAMBDA,
+        clip_range=CLIP_RANGE,
+        ent_coef=ENT_COEF,
+        vf_coef=VF_COEF,
+        max_grad_norm=MAX_GRAD_NORM,
         policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="sac_v3"
+        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="ppo_v3"
     )
 
     eval_env = DummyVecEnv([make_env(phase=1, render_mode="rgb_array")])
@@ -126,7 +151,7 @@ def main():
     )
 
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback_list)
-    model.save(os.path.join(model_dir, "sac_v3_final"))
+    model.save(os.path.join(model_dir, "ppo_v3_final"))
     env.close()
     eval_env.close()
 

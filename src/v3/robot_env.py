@@ -11,11 +11,11 @@ from utils import total_variation
 ROBOT_SIDE = 1.0
 ROBOT_RADIUS = ROBOT_SIDE / 2.0
 MAX_STEPS = 15000
-REWARD_BASE_PENALTY = -0.1
-REWARD_COLLISION = -10.0
+REWARD_BASE_PENALTY = -0.05
+REWARD_COLLISION = -3.0
 REWARD_TV_SCALE = 1.0
-REWARD_TV_MAX = 5.0
-REWARD_AREA_SCALE = 1.0
+REWARD_TV_MAX = 1.5
+REWARD_AREA_SCALE = 1.5
 REWARD_AREA_MAX = 2.0
 ROBOT_SPEED_V = 0.26
 ROBOT_SPEED_W = 1.0
@@ -38,14 +38,14 @@ SUCCESS_THRESHOLD = 0.8
 MAX_NON_NEW_STEPS = 1000
 
 PHASES = {
-    1: {"radii": (2.5, 7.5), "obst": (0, 4), "max_steps": 2500, "goal": 0.90},
-    2: {"radii": (7.5, 10.0), "obst": (4, 10), "max_steps": 3750, "goal": 0.90},
-    3: {"radii": (10.0, 12.0), "obst": (10, 16), "max_steps": 5000, "goal": 0.95},
-    4: {"radii": (12.0, 14.0), "obst": (16, 24), "max_steps": 6250, "goal": 0.95},
-    5: {"radii": (14.0, 16.0), "obst": (24, 32), "max_steps": 8750, "goal": 0.97},
-    6: {"radii": (16.0, 18.0), "obst": (32, 40), "max_steps": 11250, "goal": 0.97},
-    7: {"radii": (18.0, 20.0), "obst": (40, 50), "max_steps": 15000, "goal": 0.99},
-    8: {"radii": (20.0, 24.0), "obst": (50, 60), "max_steps": 18750, "goal": 0.99},
+    1: {"radii": (2.5, 7.5), "obst": (0, 4), "max_steps": 4000, "goal": 0.90},
+    2: {"radii": (7.5, 10.0), "obst": (4, 10), "max_steps": 6000, "goal": 0.90},
+    3: {"radii": (10.0, 12.0), "obst": (10, 16), "max_steps": 8000, "goal": 0.95},
+    4: {"radii": (12.0, 14.0), "obst": (16, 24), "max_steps": 10000, "goal": 0.95},
+    5: {"radii": (14.0, 16.0), "obst": (24, 32), "max_steps": 14000, "goal": 0.97},
+    6: {"radii": (16.0, 18.0), "obst": (32, 40), "max_steps": 18000, "goal": 0.97},
+    7: {"radii": (18.0, 20.0), "obst": (40, 50), "max_steps": 24000, "goal": 0.99},
+    8: {"radii": (20.0, 24.0), "obst": (50, 60), "max_steps": 30000, "goal": 0.99},
 }
 
 

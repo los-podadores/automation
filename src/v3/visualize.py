@@ -1,6 +1,6 @@
 import argparse
 
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO
 
 from robot_env import RobotCoverageEnv
 
@@ -12,7 +12,7 @@ def main():
     parser.add_argument("--episodes", type=int, default=5, help="Number of episodes")
     args = parser.parse_args()
 
-    model = SAC.load(args.model)
+    model = PPO.load(args.model)
 
     env = RobotCoverageEnv(render_mode="human", phase=args.phase)
 
