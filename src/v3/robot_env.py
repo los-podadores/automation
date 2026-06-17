@@ -20,8 +20,8 @@ REWARD_AREA_MAX = 2.0
 ROBOT_SPEED_V = 0.26
 ROBOT_SPEED_W = 1.0
 DT = 0.5
-METERS_PER_PIXEL = 0.0375
-NUM_MAPS = 4
+METERS_PER_PIXEL = 0.1
+NUM_MAPS = 3
 MAP_SIZE = 32
 SCALE_FACTOR = 4
 SENSOR_DIM = 8
@@ -29,21 +29,23 @@ NUM_RAYS = 6
 RAY_MAX_DIST = 1
 POSITION_NOISE = 0.01
 HEADING_NOISE = 0.05
-OBSTACLE_DILATION = 9
+OBSTACLE_DILATION = 1
+ROBOT_RADIUS_PX = 5
+SPAWN_SAFETY_RADIUS_PX = 1
 MAX_FIELD_ATTEMPTS = 100
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
 MAX_NON_NEW_STEPS = 1000
 
 PHASES = {
-    1: {"radii": (1.2, 3.75), "obst": (0, 2), "max_steps": 2000, "goal": 0.90},
-    2: {"radii": (3.75, 5.0), "obst": (2, 5), "max_steps": 3000, "goal": 0.90},
-    3: {"radii": (5.0, 6.0), "obst": (5, 8), "max_steps": 4000, "goal": 0.95},
-    4: {"radii": (6.0, 7.0), "obst": (8, 12), "max_steps": 5000, "goal": 0.95},
-    5: {"radii": (7.0, 8.0), "obst": (12, 16), "max_steps": 7000, "goal": 0.97},
-    6: {"radii": (8.0, 9.0), "obst": (16, 20), "max_steps": 9000, "goal": 0.97},
-    7: {"radii": (9.0, 10.0), "obst": (20, 25), "max_steps": 12000, "goal": 0.99},
-    8: {"radii": (10.0, 12.0), "obst": (25, 30), "max_steps": 15000, "goal": 0.99},
+    1: {"radii": (2.5, 7.5), "obst": (0, 4), "max_steps": 2500, "goal": 0.90},
+    2: {"radii": (7.5, 10.0), "obst": (4, 10), "max_steps": 3750, "goal": 0.90},
+    3: {"radii": (10.0, 12.0), "obst": (10, 16), "max_steps": 5000, "goal": 0.95},
+    4: {"radii": (12.0, 14.0), "obst": (16, 24), "max_steps": 6250, "goal": 0.95},
+    5: {"radii": (14.0, 16.0), "obst": (24, 32), "max_steps": 8750, "goal": 0.97},
+    6: {"radii": (16.0, 18.0), "obst": (32, 40), "max_steps": 11250, "goal": 0.97},
+    7: {"radii": (18.0, 20.0), "obst": (40, 50), "max_steps": 15000, "goal": 0.99},
+    8: {"radii": (20.0, 24.0), "obst": (50, 60), "max_steps": 18750, "goal": 0.99},
 }
 
 
@@ -107,7 +109,10 @@ class RobotCoverageEnv(gym.Env):
         self.global_tv = 0.0
         self.local_coverage_old = None
         self.local_known_obstacles_old = None
-        self._last_swept_bbox = None
+        self._last_swept_bbox = None  # legacy attribute, no longer populated
+        self._last_stamp_bbox = (
+            None  # (min_x, max_x, min_y, max_y) of last _stamp_coverage window
+        )
 
         self.window_size = 800
         self.window = None
@@ -175,7 +180,7 @@ class RobotCoverageEnv(gym.Env):
             if nx * (inward.x - px) + ny * (inward.y - py) < 0:
                 nx, ny = -nx, -ny
 
-            spawn_dist = ROBOT_SIDE
+            spawn_dist = ROBOT_RADIUS + 0.5 * ROBOT_SIDE
             x = px + nx * spawn_dist
             y = py + ny * spawn_dist
             theta = math.atan2(dy, dx)
@@ -217,7 +222,7 @@ class RobotCoverageEnv(gym.Env):
             cv2.fillPoly(self.field_grid, [hole_px], 0)
 
     def _compute_pre_dilated_map(self):
-        robot_r_px = max(1, int(ROBOT_RADIUS * self.pixels_per_meter))
+        robot_r_px = ROBOT_RADIUS_PX
         obs_for_dilation = self.true_obstacle_map.copy()
         obs_for_dilation[0, :] = 1
         obs_for_dilation[-1, :] = 1
@@ -226,12 +231,33 @@ class RobotCoverageEnv(gym.Env):
         kernel = np.ones((robot_r_px * 2 + 1,) * 2, dtype=np.float32)
         self.pre_dilated_map = cv2.dilate(obs_for_dilation, kernel, iterations=1)
 
+    def _compute_spawn_safety_map(self):
+        safety_r_px = SPAWN_SAFETY_RADIUS_PX
+        obs_for_dilation = self.true_obstacle_map.copy()
+        obs_for_dilation[0, :] = 1
+        obs_for_dilation[-1, :] = 1
+        obs_for_dilation[:, 0] = 1
+        obs_for_dilation[:, -1] = 1
+        if safety_r_px > 0:
+            kernel = np.ones((safety_r_px * 2 + 1,) * 2, dtype=np.float32)
+            self.spawn_safety_map = cv2.dilate(obs_for_dilation, kernel, iterations=1)
+        else:
+            self.spawn_safety_map = obs_for_dilation
+
+    def _compute_coverable_area(self):
+        valid_positions = ((self.field_grid > 0) & (self.pre_dilated_map == 0)).astype(
+            np.uint8
+        )
+        k = ROBOT_RADIUS_PX
+        y, x = np.ogrid[-k : k + 1, -k : k + 1]
+        kernel = ((x * x + y * y) <= k * k).astype(np.uint8)
+        swept = cv2.dilate(valid_positions, kernel, iterations=1)
+        self.coverable_area = (swept & (self.field_grid > 0)).astype(np.uint8)
+
     def _init_maps(self):
         self.obstacle_map = np.zeros(
             (self.grid_size_p, self.grid_size_p), dtype=np.float32
         )
-        boundary = cv2.Canny((self.field_grid * 255).astype(np.uint8), 50, 150)
-        self.obstacle_map[boundary > 0] = 1.0
         self.coverage_map = np.zeros(
             (self.grid_size_p, self.grid_size_p), dtype=np.float32
         )
@@ -239,25 +265,24 @@ class RobotCoverageEnv(gym.Env):
             (self.grid_size_p, self.grid_size_p), dtype=np.float32
         )
 
-        self._update_coverage_at(self.agent_pos_m)
+        self._stamp_initial_coverage(self.agent_pos_m)
         self.frontier_map = self._compute_frontier_map()
         self._init_metrics()
 
     def _init_metrics(self):
-        all_obs = self.pre_dilated_map
-        free = self.field_grid.astype(np.float32)
-        free[all_obs > 0] = 0
-        self.total_cells = max(int(free.sum()), 1)
+        self.total_cells = max(int(self.coverable_area.sum()), 1)
 
         cov = self.coverage_map.copy()
-        cov[all_obs > 0] = 0
+        cov[self.coverable_area == 0] = 0
         self.coverage_in_pixels = int(cov.sum())
         self.coverage_in_percent = self.coverage_in_pixels / self.total_cells
 
         local_cov = self._get_local_crop(
             self.coverage_map, self.agent_pos_m, ROBOT_RADIUS
         )
-        local_obs = self._get_local_crop(all_obs, self.agent_pos_m, ROBOT_RADIUS)
+        local_obs = self._get_local_crop(
+            self.pre_dilated_map, self.agent_pos_m, ROBOT_RADIUS
+        )
         self.global_tv = total_variation(local_cov, local_obs)
 
     def _m_to_p(self, pos_m):
@@ -289,7 +314,7 @@ class RobotCoverageEnv(gym.Env):
 
     def _is_out_of_bounds(self, pos_m):
         pos_p = self._m_to_p(pos_m)
-        r = int(ROBOT_RADIUS * self.pixels_per_meter)
+        r = ROBOT_RADIUS_PX
         x, y = int(pos_p[0]), int(pos_p[1])
         if x - r < 0 or x + r >= self.grid_size_p:
             return True
@@ -299,7 +324,7 @@ class RobotCoverageEnv(gym.Env):
 
     def _is_obstacle_collision(self, pos_m):
         pos_p = self._m_to_p(pos_m)
-        ix, iy = int(pos_p[0]), int(pos_p[1])
+        ix, iy = int(round(pos_p[0])), int(round(pos_p[1]))
         if ix < 0 or ix >= self.grid_size_p or iy < 0 or iy >= self.grid_size_p:
             return True
         return self.pre_dilated_map[iy, ix] > 0
@@ -328,46 +353,80 @@ class RobotCoverageEnv(gym.Env):
             corners.append([gx, gy])
         return np.array(corners, dtype=np.float64)
 
-    def _update_coverage_at(self, pos_m):
-        corners = self._get_square_corners(pos_m, self.agent_heading)
-        corners_p = self._m_to_p(corners).astype(np.int32)
-        mask = np.zeros((self.grid_size_p, self.grid_size_p), dtype=np.uint8)
-        cv2.fillConvexPoly(mask, corners_p, 1)
-        new_cells = int(np.logical_and(mask, (self.coverage_map == 0)).sum())
-        self.coverage_map = np.maximum(self.coverage_map, mask.astype(np.float32))
-        self.overlap_map += mask.astype(np.float32)
-        return new_cells
+    def _stamp_coverage(self, old_pos_m, new_pos_m, old_heading, new_heading):
+        old_px = self._m_to_grid_px(old_pos_m)
+        new_px = self._m_to_grid_px(new_pos_m)
+        radius = ROBOT_RADIUS_PX
 
-    def _compute_swept_coverage(self, old_pos_m, new_pos_m, old_heading, new_heading):
-        c1 = self._get_square_corners(old_pos_m, old_heading)
-        c2 = self._get_square_corners(new_pos_m, new_heading)
-        all_pts = np.vstack([c1, c2])
-        all_px = self._m_to_p(all_pts).astype(np.int32)
-
-        pad = int(ROBOT_RADIUS * self.pixels_per_meter) + 4
-        min_x = max(0, int(all_px[:, 0].min()) - pad)
-        max_x = min(self.grid_size_p, int(all_px[:, 0].max()) + pad + 1)
-        min_y = max(0, int(all_px[:, 1].min()) - pad)
-        max_y = min(self.grid_size_p, int(all_px[:, 1].max()) + pad + 1)
+        min_x = max(0, min(old_px[0], new_px[0]) - radius - 1)
+        max_x = min(self.grid_size_p, max(old_px[0], new_px[0]) + radius + 2)
+        min_y = max(0, min(old_px[1], new_px[1]) - radius - 1)
+        max_y = min(self.grid_size_p, max(old_px[1], new_px[1]) + radius + 2)
+        self._last_stamp_bbox = (min_x, max_x, min_y, max_y)
         if min_x >= max_x or min_y >= max_y:
             return 0
 
-        local_pts = all_px - np.array([min_x, min_y])
-        hull = cv2.convexHull(local_pts.reshape(-1, 1, 2))
-        local_w = max_x - min_x
-        local_h = max_y - min_y
-        local_mask = np.zeros((local_h, local_w), dtype=np.uint8)
-        cv2.fillConvexPoly(local_mask, hull, 1)
-
+        local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
+        local_overlap = self.overlap_map[min_y:max_y, min_x:max_x]
         local_obs = self.pre_dilated_map[min_y:max_y, min_x:max_x]
+
+        local_h = max_y - min_y
+        local_w = max_x - min_x
+        local_mask = np.zeros((local_h, local_w), dtype=np.uint8)
+
+        ox_local = old_px[0] - min_x
+        oy_local = old_px[1] - min_y
+        nx_local = new_px[0] - min_x
+        ny_local = new_px[1] - min_y
+
+        dist_sq = (nx_local - ox_local) ** 2 + (ny_local - oy_local) ** 2
+        if dist_sq <= 2:
+            cv2.circle(local_mask, (ox_local, oy_local), radius, 1, thickness=-1)
+        else:
+            cv2.line(
+                local_mask,
+                (ox_local, oy_local),
+                (nx_local, ny_local),
+                1,
+                thickness=2 * radius,
+            )
+
         local_mask[local_obs > 0] = 0
 
-        local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
         new_pixels = int(np.logical_and(local_mask, (local_cov == 0)).sum())
         local_cov[:] = np.maximum(local_cov, local_mask.astype(np.float32))
-        self.overlap_map[min_y:max_y, min_x:max_x] += local_mask.astype(np.float32)
-        self._last_swept_bbox = (min_x, max_x, min_y, max_y)
+        local_overlap[:] = local_overlap + local_mask.astype(np.float32)
+
         return new_pixels
+
+    def _stamp_initial_coverage(self, pos_m):
+        px = self._m_to_grid_px(pos_m)
+        radius = ROBOT_RADIUS_PX
+
+        min_x = max(0, px[0] - radius - 1)
+        max_x = min(self.grid_size_p, px[0] + radius + 2)
+        min_y = max(0, px[1] - radius - 1)
+        max_y = min(self.grid_size_p, px[1] + radius + 2)
+        self._last_stamp_bbox = (min_x, max_x, min_y, max_y)
+        if min_x >= max_x or min_y >= max_y:
+            return
+
+        local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
+        local_overlap = self.overlap_map[min_y:max_y, min_x:max_x]
+        local_obs = self.pre_dilated_map[min_y:max_y, min_x:max_x]
+        local_h = max_y - min_y
+        local_w = max_x - min_x
+        local_mask = np.zeros((local_h, local_w), dtype=np.uint8)
+        cv2.circle(
+            local_mask,
+            (px[0] - min_x, px[1] - min_y),
+            radius,
+            1,
+            thickness=-1,
+        )
+        local_mask[local_obs > 0] = 0
+        local_cov[:] = np.maximum(local_cov, local_mask.astype(np.float32))
+        local_overlap[:] = local_overlap + local_mask.astype(np.float32)
 
     def _compute_frontier_map(self):
         cov = self.coverage_map.copy()
@@ -512,7 +571,7 @@ class RobotCoverageEnv(gym.Env):
             if hp is not None:
                 ix, iy = hp
                 if 0 <= ix < self.grid_size_p and 0 <= iy < self.grid_size_p:
-                    r = 3
+                    r = ROBOT_RADIUS_PX
                     y1 = max(0, iy - r)
                     y2 = min(self.grid_size_p, iy + r + 1)
                     x1 = max(0, ix - r)
@@ -536,6 +595,8 @@ class RobotCoverageEnv(gym.Env):
             "frontier": self._get_multi_scale_map(self.frontier_map, 0),
             "sensors": self._last_sensors,
         }
+        for key in ("coverage", "obstacles", "frontier"):
+            np.clip(obs[key], 0.0, 1.0, out=obs[key])
         return obs
 
     def reset(self, seed=None, options=None):
@@ -550,6 +611,8 @@ class RobotCoverageEnv(gym.Env):
         self._rasterize_field()
         self.true_obstacle_map = (1 - self.field_grid).astype(np.float32)
         self._compute_pre_dilated_map()
+        self._compute_spawn_safety_map()
+        self._compute_coverable_area()
         self._get_safe_spawn()
         self._init_maps()
 
@@ -614,15 +677,14 @@ class RobotCoverageEnv(gym.Env):
 
         new_cells = 0
         if not collided:
-            new_cells = self._compute_swept_coverage(
+            new_cells = self._stamp_coverage(
                 old_pos, self.agent_pos_m, old_heading, self.agent_heading
             )
 
         self.frontier_map = self._compute_frontier_map()
 
-        all_obs = self.pre_dilated_map
         cov = self.coverage_map.copy()
-        cov[all_obs > 0] = 0
+        cov[self.coverable_area == 0] = 0
         self.coverage_in_pixels = int(cov.sum())
         self.coverage_in_percent = self.coverage_in_pixels / self.total_cells
 
@@ -648,7 +710,9 @@ class RobotCoverageEnv(gym.Env):
             local_cov_new = self._get_local_crop(
                 self.coverage_map, self.agent_pos_m, radius_m
             )
-            local_obs_new = self._get_local_crop(all_obs, self.agent_pos_m, radius_m)
+            local_obs_new = self._get_local_crop(
+                self.pre_dilated_map, self.agent_pos_m, radius_m
+            )
 
             if local_cov_old is not None and local_obs_old is not None:
                 if local_cov_new.shape == local_cov_old.shape:
@@ -739,9 +803,7 @@ class RobotCoverageEnv(gym.Env):
                     y / self.pixels_per_meter + self.render_offset[1],
                 )
                 size = max(1, int(self.render_scale))
-                pygame.draw.rect(
-                    self.window, (200, 200, 200), (px, py, size, size)
-                )
+                pygame.draw.rect(self.window, (200, 200, 200), (px, py, size, size))
 
         for y in range(self.grid_size_p):
             for x in range(self.grid_size_p):
@@ -751,9 +813,7 @@ class RobotCoverageEnv(gym.Env):
                         y / self.pixels_per_meter + self.render_offset[1],
                     )
                     size = max(1, int(self.render_scale))
-                    pygame.draw.rect(
-                        self.window, (144, 238, 144), (px, py, size, size)
-                    )
+                    pygame.draw.rect(self.window, (144, 238, 144), (px, py, size, size))
 
         for y in range(self.grid_size_p):
             for x in range(self.grid_size_p):
@@ -763,17 +823,13 @@ class RobotCoverageEnv(gym.Env):
                         y / self.pixels_per_meter + self.render_offset[1],
                     )
                     size = max(1, int(self.render_scale))
-                    pygame.draw.rect(
-                        self.window, (100, 100, 100), (px, py, size, size)
-                    )
+                    pygame.draw.rect(self.window, (100, 100, 100), (px, py, size, size))
 
-        robot_px, robot_py = self._to_pygame(
-            self.agent_pos_m[0], self.agent_pos_m[1]
+        robot_px, robot_py = self._to_pygame(self.agent_pos_m[0], self.agent_pos_m[1])
+        robot_size = max(
+            1, int(ROBOT_RADIUS * self.pixels_per_meter * self.render_scale)
         )
-        robot_size = max(1, int(ROBOT_RADIUS * self.pixels_per_meter * self.render_scale))
-        pygame.draw.circle(
-            self.window, (255, 0, 0), (robot_px, robot_py), robot_size
-        )
+        pygame.draw.circle(self.window, (255, 0, 0), (robot_px, robot_py), robot_size)
 
         end_x = robot_px + int(
             ROBOT_RADIUS
@@ -795,6 +851,4 @@ class RobotCoverageEnv(gym.Env):
             pygame.display.flip()
             self.clock.tick(self.metadata["render_fps"])
         else:
-            return np.transpose(
-                pygame.surfarray.array3d(self.window), (1, 0, 2)
-            )
+            return np.transpose(pygame.surfarray.array3d(self.window), (1, 0, 2))

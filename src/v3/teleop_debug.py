@@ -9,6 +9,7 @@ from robot_env import (
     METERS_PER_PIXEL,
     PHASES,
     REWARD_BASE_PENALTY,
+    ROBOT_RADIUS_PX,
     RobotCoverageEnv,
 )
 
@@ -16,6 +17,7 @@ ENV_SIZE = 700
 PANEL_W = 660
 WINDOW_W = ENV_SIZE + PANEL_W
 WINDOW_H = 980
+TELEOP_ROT_SCALE = 0.4
 
 SENSOR_NAMES = [
     "ray_front_left",
@@ -169,8 +171,8 @@ def draw_env_view(surface, env, x0, y0, toggles):
                         err += adx
                         cy += sy_step
 
-    if toggles["swept"] and hasattr(env, "_last_swept_bbox"):
-        bb = env._last_swept_bbox
+    if toggles["stamped"] and hasattr(env, "_last_stamp_bbox"):
+        bb = env._last_stamp_bbox
         if bb is not None:
             min_x, max_x, min_y, max_y = bb
             corners_bb = [
@@ -198,13 +200,13 @@ def draw_env_view(surface, env, x0, y0, toggles):
 
 def draw_obs_maps(surface, obs, panel_x, y, font):
     draw_text(
-        surface, "MULTI-SCALE MAPS (4 scales):", panel_x + 10, y, font, (180, 200, 255)
+        surface, "MULTI-SCALE MAPS (3 scales):", panel_x + 10, y, font, (180, 200, 255)
     )
     y += 18
 
     keys = ["coverage", "obstacles", "frontier"]
     map_px = 120
-    num_scales = 4
+    num_scales = 3
     col_gap = 12
     row_gap = 6
 
@@ -271,7 +273,7 @@ def main():
     show_help = True
     toggles = {
         "dilated": False,
-        "swept": False,
+        "stamped": False,
         "footprint": False,
         "rays": False,
     }
@@ -297,7 +299,7 @@ def main():
                 elif event.key == pygame.K_d:
                     toggles["dilated"] = not toggles["dilated"]
                 elif event.key == pygame.K_b:
-                    toggles["swept"] = not toggles["swept"]
+                    toggles["stamped"] = not toggles["stamped"]
                 elif event.key == pygame.K_f:
                     toggles["footprint"] = not toggles["footprint"]
                 elif event.key == pygame.K_g:
@@ -329,6 +331,7 @@ def main():
                 steering = 1.0
             if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
                 steering = -1.0
+            steering *= TELEOP_ROT_SCALE
             action = np.array([throttle, steering], dtype=np.float32)
         else:
             action = env.action_space.sample()
@@ -396,7 +399,7 @@ def main():
             y += 15
             draw_text(
                 screen,
-                " D: dilated map  B: swept bbox",
+                " D: collision dil  B: stamp bbox",
                 panel_x + 10,
                 y,
                 font_sm,
@@ -528,10 +531,10 @@ def main():
             (200, 200, 200),
         )
         y += 15
-        dil_k = max(1, int(env.pixels_per_meter * 0.5))
+        dil_k = ROBOT_RADIUS_PX
         draw_text(
             screen,
-            f" dilated kernel: {dil_k * 2 + 1}x{dil_k * 2 + 1}",
+            f" collision dil: {dil_k * 2 + 1}x{dil_k * 2 + 1}",
             panel_x + 10,
             y,
             font_sm,
@@ -558,8 +561,8 @@ def main():
         draw_text(screen, "OVERLAYS:", panel_x + 10, y, font_md, (180, 200, 255))
         y += 18
         for key, label in [
-            ("dilated", "D: pre-dilated map"),
-            ("swept", "B: swept bbox"),
+            ("dilated", "D: collision dil"),
+            ("stamped", "B: stamp bbox"),
             ("footprint", "F: local footprint"),
             ("rays", "G: ray pixel steps"),
         ]:
