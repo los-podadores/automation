@@ -9,7 +9,7 @@ from robot_env import (
     SENSOR_DIM,
     RobotCoverageEnv,
 )
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
@@ -17,17 +17,21 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
 )
 from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
-LEARNING_RATE = 2e-5
-BUFFER_SIZE = 100_000
-TRAIN_FREQ = 1
-GRADIENT_STEPS = 1
+LEARNING_RATE = 3e-4
+N_STEPS = 2048
+N_ENVS = 10
 BATCH_SIZE = 256
+N_EPOCHS = 10
 GAMMA = 0.99
-TOTAL_TIMESTEPS = 1_000_000
-SAVE_FREQ = 100_000
-EVAL_FREQ = 100_000
+GAE_LAMBDA = 0.95
+CLIP_RANGE = 0.2
+ENT_COEF = 0.01
+TOTAL_TIMESTEPS = 2_000_000
+SAVE_FREQ = 200_000
+EVAL_FREQ = 200_000
 CNN_DIMS = 256
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
@@ -62,6 +66,7 @@ class CurriculumCallback(BaseCallback):
 def make_env(phase=1, render_mode=None):
     def _init():
         env = RobotCoverageEnv(render_mode=render_mode, phase=phase)
+        env = Monitor(env, info_keywords=("coverage_percent", "num_collisions", "phase"))
         return env
 
     return _init
@@ -69,7 +74,7 @@ def make_env(phase=1, render_mode=None):
 
 def main():
     print("Initializing training environments...")
-    env = DummyVecEnv([make_env(phase=1)])
+    env = SubprocVecEnv([make_env(phase=1) for _ in range(N_ENVS)])
     check_env(RobotCoverageEnv(phase=1), warn=True)
 
     log_dir = "./logs/v2/"
@@ -86,25 +91,27 @@ def main():
             sensor_dim=SENSOR_DIM,
             num_map_types=3,
         ),
-        net_arch=dict(pi=[CNN_DIMS, CNN_DIMS], qf=[CNN_DIMS, CNN_DIMS]),
+        net_arch=dict(pi=[CNN_DIMS, CNN_DIMS], vf=[CNN_DIMS, CNN_DIMS]),
     )
 
-    model = SAC(
+    model = PPO(
         policy="MultiInputPolicy",
         env=env,
         learning_rate=LEARNING_RATE,
-        buffer_size=BUFFER_SIZE,
-        train_freq=TRAIN_FREQ,
-        gradient_steps=GRADIENT_STEPS,
+        n_steps=N_STEPS,
         batch_size=BATCH_SIZE,
+        n_epochs=N_EPOCHS,
         gamma=GAMMA,
+        gae_lambda=GAE_LAMBDA,
+        clip_range=CLIP_RANGE,
+        ent_coef=ENT_COEF,
         policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="sac_v2"
+        save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="ppo_v2"
     )
 
     eval_env = DummyVecEnv([make_env(phase=1, render_mode="rgb_array")])
@@ -124,7 +131,7 @@ def main():
     )
 
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback_list)
-    model.save(os.path.join(model_dir, "sac_v2_final"))
+    model.save(os.path.join(model_dir, "ppo_v2_final"))
     env.close()
     eval_env.close()
 
