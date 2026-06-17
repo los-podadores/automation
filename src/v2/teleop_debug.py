@@ -13,7 +13,7 @@ from robot_env import (
 ENV_SIZE = 700
 PANEL_W = 660
 WINDOW_W = ENV_SIZE + PANEL_W
-WINDOW_H = 820
+WINDOW_H = 980
 CELL_PX = 8
 GRID_PX = CELL_PX * MAP_SIZE
 
@@ -153,31 +153,37 @@ def draw_env_view(surface, env, x0, y0):
 
 def draw_obs_maps(surface, obs, panel_x, y, font):
     draw_text(
-        surface, "MULTI-SCALE MAPS (scale 0):", panel_x + 10, y, font, (180, 200, 255)
+        surface, "MULTI-SCALE MAPS (4 scales):", panel_x + 10, y, font, (180, 200, 255)
     )
     y += 18
 
     keys = ["coverage", "obstacles", "frontier"]
-    map_cell = 3
-    map_px = MAP_SIZE * map_cell
+    map_px = 120
+    num_scales = 4
+    col_gap = 12
+    row_gap = 6
 
-    for i, (key, name, color) in enumerate(zip(keys, MAP_NAMES, MAP_COLORS)):
-        cx = panel_x + 10 + i * (map_px + 15)
-        draw_text(surface, name, cx, y, font, color)
-        data = obs[key][0]  # scale 0
-        img = np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8)
-        mask = data > 0.01
-        intensity = np.clip(data, 0, 1)
-        for c in range(3):
-            img[:, :, c] = (intensity * color[c]).astype(np.uint8)
-        img[~mask] = 0
-        img = cv2.resize(img, (map_px, map_px), interpolation=cv2.INTER_NEAREST)
-        img = np.transpose(img, (1, 0, 2))
-        surf = pygame.surfarray.make_surface(img)
-        pygame.draw.rect(surf, (80, 80, 80), (0, 0, map_px, map_px), 1)
-        surface.blit(surf, (cx, y + 16))
+    for scale in range(num_scales):
+        draw_text(surface, f"S{scale}:", panel_x + 10, y, font, (150, 150, 150))
+        for i, (key, name, color) in enumerate(zip(keys, MAP_NAMES, MAP_COLORS)):
+            cx = panel_x + 40 + i * (map_px + col_gap)
+            if scale == 0:
+                draw_text(surface, name, cx, y - 10, font, color)
+            data = obs[key][scale]
+            img = np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8)
+            mask = data > 0.01
+            intensity = np.clip(data, 0, 1)
+            for c in range(3):
+                img[:, :, c] = (intensity * color[c]).astype(np.uint8)
+            img[~mask] = 0
+            img = cv2.resize(img, (map_px, map_px), interpolation=cv2.INTER_NEAREST)
+            img = np.transpose(img, (1, 0, 2))
+            surf = pygame.surfarray.make_surface(img)
+            pygame.draw.rect(surf, (80, 80, 80), (0, 0, map_px, map_px), 1)
+            surface.blit(surf, (cx, y))
+        y += map_px + row_gap
 
-    return y + 16 + map_px + 10
+    return y + 10
 
 
 def main():

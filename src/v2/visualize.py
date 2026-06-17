@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from robot_env import RobotCoverageEnv, PHASES
+from robot_env import PHASES, RobotCoverageEnv
 from stable_baselines3 import SAC
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "models", "v2")
