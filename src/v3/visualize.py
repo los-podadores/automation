@@ -1,23 +1,28 @@
 import argparse
 
+import numpy as np
 from stable_baselines3 import PPO
 
 from robot_env import RobotCoverageEnv
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Visualize trained PPO agent")
     parser.add_argument("--model", type=str, required=True, help="Path to trained model")
-    parser.add_argument("--phase", type=int, default=1, help="Phase to evaluate")
+    parser.add_argument("--phase", type=int, default=1, help="Phase to evaluate (1-8)")
     parser.add_argument("--episodes", type=int, default=5, help="Number of episodes")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     args = parser.parse_args()
+
+    if args.seed is not None:
+        np.random.seed(args.seed)
 
     model = PPO.load(args.model)
 
     env = RobotCoverageEnv(render_mode="human", phase=args.phase)
 
     for ep in range(args.episodes):
-        obs, info = env.reset()
+        obs, info = env.reset(seed=args.seed)
         done = False
         total_reward = 0.0
         steps = 0

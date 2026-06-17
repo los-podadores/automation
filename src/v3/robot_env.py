@@ -117,7 +117,6 @@ class RobotCoverageEnv(gym.Env):
         self.window_size = 800
         self.window = None
         self.clock = None
-        self.render_scale = 1.0
         self.render_offset = np.array([0.0, 0.0])
 
     def _generate_random_field(self):
@@ -629,6 +628,8 @@ class RobotCoverageEnv(gym.Env):
         info = {
             "coverage_cells": self.coverage_in_pixels,
             "total_cells": self.total_cells,
+            "coverage_percent": self.coverage_in_percent,
+            "num_collisions": self.num_collisions,
             "phase": self.phase,
         }
         return obs, info
@@ -766,11 +767,6 @@ class RobotCoverageEnv(gym.Env):
         if pygame.get_init():
             pygame.quit()
 
-    def _to_pygame(self, x, y):
-        px = int((x - self.render_offset[0]) * self.render_scale)
-        py = int(self.window_size - (y - self.render_offset[1]) * self.render_scale)
-        return px, py
-
     def render(self):
         if self.render_mode is None:
             return
@@ -787,65 +783,58 @@ class RobotCoverageEnv(gym.Env):
                 self.window = pygame.Surface((self.window_size, self.window_size))
             self.clock = pygame.time.Clock()
 
-        self.window.fill((255, 255, 255))
+        ws = self.window_size
+        canvas = pygame.Surface((ws, ws))
+        canvas.fill((30, 30, 30))
 
-        if self.grid_size_p > 0:
-            self.render_scale = self.window_size / self.grid_size_p
-        else:
-            self.render_scale = 1.0
+        if self.grid_size_p <= 0 or self.field is None:
+            self.window.blit(canvas, (0, 0))
+            if self.render_mode == "human":
+                pygame.display.flip()
+                self.clock.tick(self.metadata["render_fps"])
+            return
 
-        for y in range(self.grid_size_p):
-            for x in range(self.grid_size_p):
-                if self.field_grid[y, x] == 0:
-                    continue
-                px, py = self._to_pygame(
-                    x / self.pixels_per_meter + self.render_offset[0],
-                    y / self.pixels_per_meter + self.render_offset[1],
-                )
-                size = max(1, int(self.render_scale))
-                pygame.draw.rect(self.window, (200, 200, 200), (px, py, size, size))
+        pad = 5.0
+        minx, miny, maxx, maxy = self.field.bounds
+        width = (maxx - minx) + 2 * pad
+        height = (maxy - miny) + 2 * pad
+        scl = ws / max(width, height)
+        off = np.array([minx - pad, miny - pad])
 
-        for y in range(self.grid_size_p):
-            for x in range(self.grid_size_p):
-                if self.coverage_map[y, x] > 0:
-                    px, py = self._to_pygame(
-                        x / self.pixels_per_meter + self.render_offset[0],
-                        y / self.pixels_per_meter + self.render_offset[1],
-                    )
-                    size = max(1, int(self.render_scale))
-                    pygame.draw.rect(self.window, (144, 238, 144), (px, py, size, size))
+        def to_screen(wx, wy):
+            px = int((wx - off[0]) * scl)
+            py = int(ws - (wy - off[1]) * scl)
+            return px, py
 
-        for y in range(self.grid_size_p):
-            for x in range(self.grid_size_p):
-                if self.true_obstacle_map[y, x] > 0:
-                    px, py = self._to_pygame(
-                        x / self.pixels_per_meter + self.render_offset[0],
-                        y / self.pixels_per_meter + self.render_offset[1],
-                    )
-                    size = max(1, int(self.render_scale))
-                    pygame.draw.rect(self.window, (100, 100, 100), (px, py, size, size))
+        img = np.full((self.grid_size_p, self.grid_size_p, 3), 30, dtype=np.uint8)
+        img[self.field_grid > 0] = [220, 220, 220]
+        img[self.coverage_map > 0] = [80, 160, 80]
+        img[self.obstacle_map > 0] = [200, 80, 80]
 
-        robot_px, robot_py = self._to_pygame(self.agent_pos_m[0], self.agent_pos_m[1])
-        robot_size = max(
-            1, int(ROBOT_RADIUS * self.pixels_per_meter * self.render_scale)
-        )
-        pygame.draw.circle(self.window, (255, 0, 0), (robot_px, robot_py), robot_size)
+        img = cv2.resize(img, (ws, ws), interpolation=cv2.INTER_NEAREST)
+        img = cv2.cvtColor(img[::-1], cv2.COLOR_BGR2RGB)
+        screen_arr = np.transpose(img, (1, 0, 2))
+        surf = pygame.surfarray.make_surface(screen_arr)
+        canvas.blit(surf, (0, 0))
 
-        end_x = robot_px + int(
-            ROBOT_RADIUS
-            * self.pixels_per_meter
-            * self.render_scale
-            * math.cos(self.agent_heading)
-        )
-        end_y = robot_py - int(
-            ROBOT_RADIUS
-            * self.pixels_per_meter
-            * self.render_scale
-            * math.sin(self.agent_heading)
-        )
+        ext_points = [to_screen(x, y) for x, y in self.field.exterior.coords]
+        pygame.draw.polygon(canvas, (0, 0, 0), ext_points, 2)
+        for interior in self.field.interiors:
+            in_points = [to_screen(x, y) for x, y in interior.coords]
+            pygame.draw.polygon(canvas, (255, 255, 255), in_points)
+            pygame.draw.polygon(canvas, (255, 0, 0), in_points, 1)
+
+        corners = self._get_square_corners(self.agent_pos_m, self.agent_heading)
+        corner_pg = [to_screen(c[0], c[1]) for c in corners]
+        pygame.draw.polygon(canvas, (50, 50, 200), corner_pg)
+
+        hx = self.agent_pos_m[0] + ROBOT_RADIUS * math.cos(self.agent_heading)
+        hy = self.agent_pos_m[1] + ROBOT_RADIUS * math.sin(self.agent_heading)
         pygame.draw.line(
-            self.window, (0, 0, 255), (robot_px, robot_py), (end_x, end_y), 2
+            canvas, (0, 255, 0), to_screen(*self.agent_pos_m), to_screen(hx, hy), 2
         )
+
+        self.window.blit(canvas, (0, 0))
 
         if self.render_mode == "human":
             pygame.display.flip()
