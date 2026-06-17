@@ -1,10 +1,12 @@
 import math
+import time
 
 import cv2
 import numpy as np
 import pygame
 from robot_env import (
     MAP_SIZE,
+    METERS_PER_PIXEL,
     PHASES,
     REWARD_BASE_PENALTY,
     RobotCoverageEnv,
@@ -38,6 +40,9 @@ RAY_COLORS = [
 MAP_NAMES = ["Coverage", "Obstacles", "Frontier"]
 MAP_COLORS = [(100, 220, 100), (220, 80, 80), (220, 120, 255)]
 
+FPS_SMOOTHING = 0.95
+SWATCH_SIZE = 64
+
 
 def draw_text(surface, text, x, y, font, color=(220, 220, 220)):
     surface.blit(font.render(text, True, color), (x, y))
@@ -50,7 +55,7 @@ def draw_bar(surface, x, y, w, h, value, max_val, color, bg=(50, 50, 50)):
     pygame.draw.rect(surface, (100, 100, 100), (x, y, w, h), 1)
 
 
-def draw_env_view(surface, env, x0, y0):
+def draw_env_view(surface, env, x0, y0, toggles):
     canvas = pygame.Surface((ENV_SIZE, ENV_SIZE))
     canvas.fill((30, 30, 30))
 
@@ -77,6 +82,10 @@ def draw_env_view(surface, env, x0, y0):
     img[cov_mask] = [80, 160, 80]
     obs_mask = env.obstacle_map > 0
     img[obs_mask] = [200, 80, 80]
+
+    if toggles["dilated"]:
+        dilated_mask = env.pre_dilated_map > 0
+        img[dilated_mask & ~obs_mask] = [50, 140, 200]
 
     img = cv2.resize(img, (ENV_SIZE, ENV_SIZE), interpolation=cv2.INTER_NEAREST)
     img = cv2.cvtColor(img[::-1], cv2.COLOR_BGR2RGB)
@@ -134,6 +143,56 @@ def draw_env_view(surface, env, x0, y0):
         pygame.draw.circle(canvas, (255, 255, 255), to_screen(*end), 3)
         pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(*origin), 3)
 
+        if toggles["rays"]:
+            ox_p, oy_p = env._m_to_grid_px(np.array(origin))
+            ex_p, ey_p = env._m_to_grid_px(np.array(end))
+            adx = abs(ex_p - ox_p)
+            ady = abs(ey_p - oy_p)
+            if adx > 0 or ady > 0:
+                sx_step = 1 if ex_p > ox_p else -1
+                sy_step = 1 if ey_p > oy_p else -1
+                err = adx - ady
+                cx, cy = ox_p, oy_p
+                max_it = adx + ady + 1
+                for _ in range(max_it):
+                    if 0 <= cx < env.grid_size_p and 0 <= cy < env.grid_size_p:
+                        wx = cx * METERS_PER_PIXEL + env.render_offset[0]
+                        wy = cy * METERS_PER_PIXEL + env.render_offset[1]
+                        pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(wx, wy), 1)
+                    if cx == ex_p and cy == ey_p:
+                        break
+                    e2 = 2 * err
+                    if e2 > -ady:
+                        err -= ady
+                        cx += sx_step
+                    if e2 < adx:
+                        err += adx
+                        cy += sy_step
+
+    if toggles["swept"] and hasattr(env, "_last_swept_bbox"):
+        bb = env._last_swept_bbox
+        if bb is not None:
+            min_x, max_x, min_y, max_y = bb
+            corners_bb = [
+                to_screen(
+                    min_x * METERS_PER_PIXEL + env.render_offset[0],
+                    max_y * METERS_PER_PIXEL + env.render_offset[1],
+                ),
+                to_screen(
+                    max_x * METERS_PER_PIXEL + env.render_offset[0],
+                    max_y * METERS_PER_PIXEL + env.render_offset[1],
+                ),
+                to_screen(
+                    max_x * METERS_PER_PIXEL + env.render_offset[0],
+                    min_y * METERS_PER_PIXEL + env.render_offset[1],
+                ),
+                to_screen(
+                    min_x * METERS_PER_PIXEL + env.render_offset[0],
+                    min_y * METERS_PER_PIXEL + env.render_offset[1],
+                ),
+            ]
+            pygame.draw.lines(canvas, (255, 200, 0), True, corners_bb, 2)
+
     surface.blit(canvas, (x0, y0))
 
 
@@ -172,6 +231,29 @@ def draw_obs_maps(surface, obs, panel_x, y, font):
     return y + 10
 
 
+def draw_footprint_inset(surface, env, panel_x, y, font, inset_px=SWATCH_SIZE):
+    draw_text(surface, "ROBOT FOOTPRINT (local):", panel_x + 10, y, font, (180, 200, 255))
+    y += 18
+    footprint = env._draw_robot_footprint_local(
+        env.agent_pos_m, env.agent_heading, local_size=inset_px
+    )
+    img = np.zeros((inset_px, inset_px, 3), dtype=np.uint8)
+    img[footprint > 0] = [50, 50, 200]
+    img = np.transpose(img, (1, 0, 2))
+    surf = pygame.surfarray.make_surface(img)
+    pygame.draw.rect(surf, (80, 80, 80), (0, 0, inset_px, inset_px), 1)
+    surface.blit(surf, (panel_x + 10, y))
+    draw_text(
+        surface,
+        f"{inset_px}x{inset_px}px  center=grid_px",
+        panel_x + inset_px + 16,
+        y + inset_px // 2 - 6,
+        font,
+        (150, 150, 150),
+    )
+    return y + inset_px + 12
+
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
@@ -187,7 +269,15 @@ def main():
     auto_sample = False
     paused = False
     show_help = True
+    toggles = {
+        "dilated": False,
+        "swept": False,
+        "footprint": False,
+        "rays": False,
+    }
 
+    fps_smooth = 0.0
+    step_times = []
     running = True
     while running:
         for event in pygame.event.get():
@@ -204,6 +294,14 @@ def main():
                     auto_sample = not auto_sample
                 elif event.key == pygame.K_h:
                     show_help = not show_help
+                elif event.key == pygame.K_d:
+                    toggles["dilated"] = not toggles["dilated"]
+                elif event.key == pygame.K_b:
+                    toggles["swept"] = not toggles["swept"]
+                elif event.key == pygame.K_f:
+                    toggles["footprint"] = not toggles["footprint"]
+                elif event.key == pygame.K_g:
+                    toggles["rays"] = not toggles["rays"]
                 elif event.key in (
                     pygame.K_1,
                     pygame.K_2,
@@ -235,13 +333,21 @@ def main():
         else:
             action = env.action_space.sample()
 
+        t0 = time.perf_counter()
         if not paused:
             obs, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
                 obs, info = env.reset()
+        dt = time.perf_counter() - t0
+        step_times.append(dt)
+        if len(step_times) > 60:
+            step_times.pop(0)
+        avg_dt = sum(step_times) / len(step_times)
+        instant_fps = 1.0 / dt if dt > 0 else 0
+        fps_smooth = FPS_SMOOTHING * fps_smooth + (1 - FPS_SMOOTHING) * instant_fps
 
         screen.fill((20, 20, 20))
-        draw_env_view(screen, env, 0, 0)
+        draw_env_view(screen, env, 0, 0, toggles)
 
         panel_x = ENV_SIZE
         pygame.draw.rect(screen, (35, 35, 40), (panel_x, 0, PANEL_W, WINDOW_H))
@@ -249,7 +355,8 @@ def main():
         y = 8
         draw_text(
             screen,
-            f"Phase: {env.phase}  Step: {env.current_step}",
+            f"Phase: {env.phase}  Step: {env.current_step}  "
+            f"FPS: {fps_smooth:.0f}  step: {avg_dt * 1000:.2f}ms",
             panel_x + 10,
             y,
             font_lg,
@@ -280,7 +387,25 @@ def main():
             y += 15
             draw_text(
                 screen,
-                " H: toggle help   T: toggle auto   ESC: quit",
+                " H: help   T: auto   ESC: quit",
+                panel_x + 10,
+                y,
+                font_sm,
+                (160, 160, 160),
+            )
+            y += 15
+            draw_text(
+                screen,
+                " D: dilated map  B: swept bbox",
+                panel_x + 10,
+                y,
+                font_sm,
+                (160, 160, 160),
+            )
+            y += 15
+            draw_text(
+                screen,
+                " F: footprint    G: ray pixels",
                 panel_x + 10,
                 y,
                 font_sm,
@@ -361,8 +486,12 @@ def main():
 
         y = draw_obs_maps(screen, obs, panel_x, y, font_sm)
 
+        if toggles["footprint"]:
+            y = draw_footprint_inset(screen, env, panel_x, y, font_sm)
+
         draw_text(screen, "STATE:", panel_x + 10, y, font_md, (180, 200, 255))
         y += 18
+        gx_px, gy_px = env._m_to_grid_px(env.agent_pos_m)
         draw_text(
             screen,
             f" pos: ({env.agent_pos_m[0]:.2f}, {env.agent_pos_m[1]:.2f})",
@@ -370,6 +499,15 @@ def main():
             y,
             font_sm,
             (200, 200, 200),
+        )
+        y += 15
+        draw_text(
+            screen,
+            f" grid_px: ({gx_px}, {gy_px})",
+            panel_x + 10,
+            y,
+            font_sm,
+            (150, 180, 255),
         )
         y += 15
         draw_text(
@@ -389,6 +527,16 @@ def main():
             font_sm,
             (200, 200, 200),
         )
+        y += 15
+        dil_k = max(1, int(env.pixels_per_meter * 0.5))
+        draw_text(
+            screen,
+            f" dilated kernel: {dil_k * 2 + 1}x{dil_k * 2 + 1}",
+            panel_x + 10,
+            y,
+            font_sm,
+            (150, 150, 150),
+        )
         y += 22
 
         draw_text(screen, "REWARD:", panel_x + 10, y, font_md, (180, 200, 255))
@@ -406,6 +554,20 @@ def main():
             (255, 120, 120),
         )
         y += 22
+
+        draw_text(screen, "OVERLAYS:", panel_x + 10, y, font_md, (180, 200, 255))
+        y += 18
+        for key, label in [
+            ("dilated", "D: pre-dilated map"),
+            ("swept", "B: swept bbox"),
+            ("footprint", "F: local footprint"),
+            ("rays", "G: ray pixel steps"),
+        ]:
+            state = "ON" if toggles[key] else "off"
+            color = (100, 220, 100) if toggles[key] else (100, 100, 100)
+            draw_text(screen, f" {label}: {state}", panel_x + 10, y, font_sm, color)
+            y += 15
+        y += 10
 
         status = []
         if paused:

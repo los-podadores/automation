@@ -107,6 +107,7 @@ class RobotCoverageEnv(gym.Env):
         self.global_tv = 0.0
         self.local_coverage_old = None
         self.local_known_obstacles_old = None
+        self._last_swept_bbox = None
 
         self.window_size = 800
         self.window = None
@@ -215,6 +216,16 @@ class RobotCoverageEnv(gym.Env):
             )
             cv2.fillPoly(self.field_grid, [hole_px], 0)
 
+    def _compute_pre_dilated_map(self):
+        robot_r_px = max(1, int(ROBOT_RADIUS * self.pixels_per_meter))
+        obs_for_dilation = self.true_obstacle_map.copy()
+        obs_for_dilation[0, :] = 1
+        obs_for_dilation[-1, :] = 1
+        obs_for_dilation[:, 0] = 1
+        obs_for_dilation[:, -1] = 1
+        kernel = np.ones((robot_r_px * 2 + 1,) * 2, dtype=np.float32)
+        self.pre_dilated_map = cv2.dilate(obs_for_dilation, kernel, iterations=1)
+
     def _init_maps(self):
         self.obstacle_map = np.zeros(
             (self.grid_size_p, self.grid_size_p), dtype=np.float32
@@ -227,12 +238,13 @@ class RobotCoverageEnv(gym.Env):
         self.overlap_map = np.zeros(
             (self.grid_size_p, self.grid_size_p), dtype=np.float32
         )
+
         self._update_coverage_at(self.agent_pos_m)
         self.frontier_map = self._compute_frontier_map()
         self._init_metrics()
 
     def _init_metrics(self):
-        all_obs = self._get_dilated_obstacles()
+        all_obs = self.pre_dilated_map
         free = self.field_grid.astype(np.float32)
         free[all_obs > 0] = 0
         self.total_cells = max(int(free.sum()), 1)
@@ -248,22 +260,32 @@ class RobotCoverageEnv(gym.Env):
         local_obs = self._get_local_crop(all_obs, self.agent_pos_m, ROBOT_RADIUS)
         self.global_tv = total_variation(local_cov, local_obs)
 
-    def _get_dilated_obstacles(self):
-        obs = self.true_obstacle_map.copy()
-        if OBSTACLE_DILATION > 1:
-            k = np.ones((OBSTACLE_DILATION,) * 2, dtype=np.float32)
-            obs[0, :] = 1
-            obs[-1, :] = 1
-            obs[:, 0] = 1
-            obs[:, -1] = 1
-            obs = cv2.dilate(obs, k, iterations=1)
-        return obs
-
     def _m_to_p(self, pos_m):
         return (pos_m - self.render_offset) * self.pixels_per_meter
 
     def _p_to_m(self, pos_p):
         return pos_p / self.pixels_per_meter + self.render_offset
+
+    def _m_to_grid_px(self, pos_m):
+        pos_p = self._m_to_p(np.asarray(pos_m))
+        return int(round(pos_p[0])), int(round(pos_p[1]))
+
+    def _draw_robot_footprint_local(self, pos_m, heading, local_size=32):
+        half = ROBOT_RADIUS
+        cos_h = math.cos(heading)
+        sin_h = math.sin(heading)
+        corners = []
+        for lx, ly in [(-half, -half), (half, -half), (half, half), (-half, half)]:
+            gx = pos_m[0] + lx * cos_h - ly * sin_h
+            gy = pos_m[1] + lx * sin_h + ly * cos_h
+            corners.append([gx, gy])
+        corners = np.array(corners, dtype=np.float64)
+        center_p = self._m_to_p(np.array(pos_m))
+        corners_p = self._m_to_p(corners)
+        local_offset = corners_p - center_p + local_size // 2
+        footprint = np.zeros((local_size, local_size), dtype=np.uint8)
+        cv2.fillConvexPoly(footprint, local_offset.astype(np.int32), 1)
+        return footprint
 
     def _is_out_of_bounds(self, pos_m):
         pos_p = self._m_to_p(pos_m)
@@ -277,20 +299,10 @@ class RobotCoverageEnv(gym.Env):
 
     def _is_obstacle_collision(self, pos_m):
         pos_p = self._m_to_p(pos_m)
-        r = int(ROBOT_RADIUS * self.pixels_per_meter)
-        cx, cy = int(pos_p[0]), int(pos_p[1])
-        y1 = max(0, cy - r)
-        y2 = min(self.grid_size_p, cy + r + 1)
-        x1 = max(0, cx - r)
-        x2 = min(self.grid_size_p, cx + r + 1)
-        if y1 >= y2 or x1 >= x2:
+        ix, iy = int(pos_p[0]), int(pos_p[1])
+        if ix < 0 or ix >= self.grid_size_p or iy < 0 or iy >= self.grid_size_p:
             return True
-        local_obs = self.true_obstacle_map[y1:y2, x1:x2]
-        local_circle = np.zeros_like(local_obs, dtype=np.uint8)
-        local_cx = cx - x1
-        local_cy = cy - y1
-        cv2.circle(local_circle, (local_cx, local_cy), r, 1, cv2.FILLED)
-        return bool(np.logical_and(local_circle, local_obs).any())
+        return self.pre_dilated_map[iy, ix] > 0
 
     def _check_collision(self, pos_m):
         if self._is_out_of_bounds(pos_m):
@@ -330,15 +342,32 @@ class RobotCoverageEnv(gym.Env):
         c1 = self._get_square_corners(old_pos_m, old_heading)
         c2 = self._get_square_corners(new_pos_m, new_heading)
         all_pts = np.vstack([c1, c2])
-        hull = cv2.convexHull(all_pts.reshape(-1, 1, 2).astype(np.float32))
-        hull_pts = hull.reshape(-1, 2).astype(np.int32)
-        hull_p = self._m_to_p(hull_pts)
-        mask = np.zeros((self.grid_size_p, self.grid_size_p), dtype=np.uint8)
-        cv2.fillConvexPoly(mask, hull_p.astype(np.int32), 1)
-        new_cells = int(np.logical_and(mask, (self.coverage_map == 0)).sum())
-        self.coverage_map = np.maximum(self.coverage_map, mask.astype(np.float32))
-        self.overlap_map += mask.astype(np.float32)
-        return new_cells
+        all_px = self._m_to_p(all_pts).astype(np.int32)
+
+        pad = int(ROBOT_RADIUS * self.pixels_per_meter) + 4
+        min_x = max(0, int(all_px[:, 0].min()) - pad)
+        max_x = min(self.grid_size_p, int(all_px[:, 0].max()) + pad + 1)
+        min_y = max(0, int(all_px[:, 1].min()) - pad)
+        max_y = min(self.grid_size_p, int(all_px[:, 1].max()) + pad + 1)
+        if min_x >= max_x or min_y >= max_y:
+            return 0
+
+        local_pts = all_px - np.array([min_x, min_y])
+        hull = cv2.convexHull(local_pts.reshape(-1, 1, 2))
+        local_w = max_x - min_x
+        local_h = max_y - min_y
+        local_mask = np.zeros((local_h, local_w), dtype=np.uint8)
+        cv2.fillConvexPoly(local_mask, hull, 1)
+
+        local_obs = self.pre_dilated_map[min_y:max_y, min_x:max_x]
+        local_mask[local_obs > 0] = 0
+
+        local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
+        new_pixels = int(np.logical_and(local_mask, (local_cov == 0)).sum())
+        local_cov[:] = np.maximum(local_cov, local_mask.astype(np.float32))
+        self.overlap_map[min_y:max_y, min_x:max_x] += local_mask.astype(np.float32)
+        self._last_swept_bbox = (min_x, max_x, min_y, max_y)
+        return new_pixels
 
     def _compute_frontier_map(self):
         cov = self.coverage_map.copy()
@@ -406,19 +435,39 @@ class RobotCoverageEnv(gym.Env):
         return gx, gy
 
     def _cast_ray_pixel(self, origin_m, angle):
-        step = METERS_PER_PIXEL * 0.5
+        origin_p = self._m_to_p(np.array(origin_m))
+        sx, sy = int(origin_p[0]), int(origin_p[1])
+        max_steps = int(RAY_MAX_DIST / METERS_PER_PIXEL)
         dx = math.cos(angle)
         dy = math.sin(angle)
-        for i in range(1, int(RAY_MAX_DIST / step) + 1):
-            px = origin_m[0] + dx * step * i
-            py = origin_m[1] + dy * step * i
-            pp = self._m_to_p(np.array([px, py]))
-            ix, iy = int(pp[0]), int(pp[1])
-            if ix < 0 or ix >= self.grid_size_p or iy < 0 or iy >= self.grid_size_p:
+        ex = sx + int(round(dx * max_steps))
+        ey = sy + int(round(dy * max_steps))
+
+        abs_dx = abs(ex - sx)
+        abs_dy = abs(ey - sy)
+        if abs_dx == 0 and abs_dy == 0:
+            return RAY_MAX_DIST, None
+        step_x = 1 if ex > sx else -1
+        step_y = 1 if ey > sy else -1
+        err = abs_dx - abs_dy
+
+        cx, cy = sx, sy
+        for _ in range(max_steps + 1):
+            if 0 <= cx < self.grid_size_p and 0 <= cy < self.grid_size_p:
+                if self.true_obstacle_map[cy, cx] > 0:
+                    hit_m = cx * METERS_PER_PIXEL + self.render_offset[0]
+                    hit_my = cy * METERS_PER_PIXEL + self.render_offset[1]
+                    dist = math.hypot(hit_m - origin_m[0], hit_my - origin_m[1])
+                    return min(dist, RAY_MAX_DIST), (cx, cy)
+            else:
                 return RAY_MAX_DIST, None
-            if self.true_obstacle_map[iy, ix] > 0:
-                dist = math.hypot(px - origin_m[0], py - origin_m[1])
-                return min(dist, RAY_MAX_DIST), (ix, iy)
+            e2 = 2 * err
+            if e2 > -abs_dy:
+                err -= abs_dy
+                cx += step_x
+            if e2 < abs_dx:
+                err += abs_dx
+                cy += step_y
         return RAY_MAX_DIST, None
 
     def _compute_sensors(self):
@@ -500,6 +549,7 @@ class RobotCoverageEnv(gym.Env):
         self.field = self._generate_random_field()
         self._rasterize_field()
         self.true_obstacle_map = (1 - self.field_grid).astype(np.float32)
+        self._compute_pre_dilated_map()
         self._get_safe_spawn()
         self._init_maps()
 
@@ -570,7 +620,7 @@ class RobotCoverageEnv(gym.Env):
 
         self.frontier_map = self._compute_frontier_map()
 
-        all_obs = self._get_dilated_obstacles()
+        all_obs = self.pre_dilated_map
         cov = self.coverage_map.copy()
         cov[all_obs > 0] = 0
         self.coverage_in_pixels = int(cov.sum())
