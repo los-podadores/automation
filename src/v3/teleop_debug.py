@@ -86,7 +86,7 @@ def draw_env_view(surface, env, x0, y0, toggles):
     img[obs_mask] = [200, 80, 80]
 
     if toggles["dilated"]:
-        dilated_mask = env.pre_dilated_map > 0
+        dilated_mask = env.virtual_wall_map > 0
         img[dilated_mask & ~obs_mask] = [50, 140, 200]
 
     if toggles["coverable"]:

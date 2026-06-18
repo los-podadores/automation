@@ -32,6 +32,7 @@ POSITION_NOISE = 0.01
 HEADING_NOISE = 0.05
 OBSTACLE_DILATION = 1
 ROBOT_RADIUS_PX = 5
+VIRTUAL_MARGIN_PX = 5
 SPAWN_SAFETY_RADIUS_PX = 1
 MAX_FIELD_ATTEMPTS = 100
 SUCCESS_WINDOW = 50
@@ -223,15 +224,18 @@ class RobotCoverageEnv(gym.Env):
             )
             cv2.fillPoly(self.field_grid, [hole_px], 0)
 
-    def _compute_pre_dilated_map(self):
-        robot_r_px = ROBOT_RADIUS_PX
+    def _compute_static_maps(self):
         obs_for_dilation = self.true_obstacle_map.copy()
         obs_for_dilation[0, :] = 1
         obs_for_dilation[-1, :] = 1
         obs_for_dilation[:, 0] = 1
         obs_for_dilation[:, -1] = 1
-        kernel = np.ones((robot_r_px * 2 + 1,) * 2, dtype=np.float32)
-        self.pre_dilated_map = cv2.dilate(obs_for_dilation, kernel, iterations=1)
+
+        kernel_phys = np.ones((ROBOT_RADIUS_PX * 2 + 1,) * 2, dtype=np.float32)
+        self.collision_map = cv2.dilate(obs_for_dilation, kernel_phys, iterations=1)
+
+        kernel_virt = np.ones((VIRTUAL_MARGIN_PX * 2 + 1,) * 2, dtype=np.float32)
+        self.virtual_wall_map = cv2.dilate(obs_for_dilation, kernel_virt, iterations=1)
 
     def _compute_spawn_safety_map(self):
         safety_r_px = SPAWN_SAFETY_RADIUS_PX
@@ -247,14 +251,7 @@ class RobotCoverageEnv(gym.Env):
             self.spawn_safety_map = obs_for_dilation
 
     def _compute_coverable_area(self):
-        valid_positions = ((self.field_grid > 0) & (self.pre_dilated_map == 0)).astype(
-            np.uint8
-        )
-        k = ROBOT_RADIUS_PX
-        y, x = np.ogrid[-k : k + 1, -k : k + 1]
-        kernel = ((x * x + y * y) <= k * k).astype(np.uint8)
-        swept = cv2.dilate(valid_positions, kernel, iterations=1)
-        self.coverable_area = (swept & (self.field_grid > 0)).astype(np.uint8)
+        self.coverable_area = ((self.field_grid > 0) & (self.virtual_wall_map == 0)).astype(np.uint8)
 
     def _init_maps(self):
         self.obstacle_map = np.zeros(
@@ -283,7 +280,7 @@ class RobotCoverageEnv(gym.Env):
             self.coverage_map, self.agent_pos_m, ROBOT_RADIUS
         )
         local_obs = self._get_local_crop(
-            self.pre_dilated_map, self.agent_pos_m, ROBOT_RADIUS
+            self.virtual_wall_map, self.agent_pos_m, ROBOT_RADIUS
         )
         self.global_tv = total_variation(local_cov, local_obs)
 
@@ -329,7 +326,7 @@ class RobotCoverageEnv(gym.Env):
         ix, iy = int(round(pos_p[0])), int(round(pos_p[1]))
         if ix < 0 or ix >= self.grid_size_p or iy < 0 or iy >= self.grid_size_p:
             return True
-        return self.true_obstacle_map[iy, ix] > 0
+        return self.collision_map[iy, ix] > 0
 
     def _check_collision(self, pos_m):
         if self._is_out_of_bounds(pos_m):
@@ -370,7 +367,7 @@ class RobotCoverageEnv(gym.Env):
 
         local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
         local_overlap = self.overlap_map[min_y:max_y, min_x:max_x]
-        local_obs = self.pre_dilated_map[min_y:max_y, min_x:max_x]
+        local_obs = self.virtual_wall_map[min_y:max_y, min_x:max_x]
 
         local_h = max_y - min_y
         local_w = max_x - min_x
@@ -415,7 +412,7 @@ class RobotCoverageEnv(gym.Env):
 
         local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
         local_overlap = self.overlap_map[min_y:max_y, min_x:max_x]
-        local_obs = self.pre_dilated_map[min_y:max_y, min_x:max_x]
+        local_obs = self.virtual_wall_map[min_y:max_y, min_x:max_x]
         local_h = max_y - min_y
         local_w = max_x - min_x
         local_mask = np.zeros((local_h, local_w), dtype=np.uint8)
@@ -569,16 +566,21 @@ class RobotCoverageEnv(gym.Env):
         return sensors, hit_points
 
     def _update_obstacle_map_from_sensors(self, hit_points):
+        inflation_radius = VIRTUAL_MARGIN_PX
+
         for hp in hit_points:
             if hp is not None:
                 ix, iy = hp
                 if 0 <= ix < self.grid_size_p and 0 <= iy < self.grid_size_p:
-                    r = ROBOT_RADIUS_PX
-                    y1 = max(0, iy - r)
-                    y2 = min(self.grid_size_p, iy + r + 1)
-                    x1 = max(0, ix - r)
-                    x2 = min(self.grid_size_p, ix + r + 1)
-                    self.obstacle_map[y1:y2, x1:x2] = 1
+                    y1 = max(0, iy - inflation_radius)
+                    y2 = min(self.grid_size_p, iy + inflation_radius + 1)
+                    x1 = max(0, ix - inflation_radius)
+                    x2 = min(self.grid_size_p, ix + inflation_radius + 1)
+
+                    perfect_wall_patch = self.virtual_wall_map[y1:y2, x1:x2]
+                    self.obstacle_map[y1:y2, x1:x2] = np.maximum(
+                        self.obstacle_map[y1:y2, x1:x2], perfect_wall_patch
+                    )
 
     def _get_local_crop(self, world_map, pos_m, radius_m):
         pos_p = self._m_to_p(pos_m)
@@ -613,7 +615,7 @@ class RobotCoverageEnv(gym.Env):
         self.field = self._generate_random_field()
         self._rasterize_field()
         self.true_obstacle_map = (1 - self.field_grid).astype(np.float32)
-        self._compute_pre_dilated_map()
+        self._compute_static_maps()
         self._compute_spawn_safety_map()
         self._compute_coverable_area()
         self._get_safe_spawn()
@@ -727,7 +729,7 @@ class RobotCoverageEnv(gym.Env):
                 self.coverage_map, self.agent_pos_m, radius_m
             )
             local_obs_new = self._get_local_crop(
-                self.pre_dilated_map, self.agent_pos_m, radius_m
+                self.virtual_wall_map, self.agent_pos_m, radius_m
             )
 
             if local_cov_old is not None and local_obs_old is not None:
@@ -827,6 +829,7 @@ class RobotCoverageEnv(gym.Env):
 
         img = np.full((self.grid_size_p, self.grid_size_p, 3), 30, dtype=np.uint8)
         img[self.field_grid > 0] = [220, 220, 220]
+        img[self.virtual_wall_map > 0] = [150, 150, 150]
         img[self.coverage_map > 0] = [80, 160, 80]
         img[self.obstacle_map > 0] = [200, 80, 80]
 
