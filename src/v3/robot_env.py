@@ -39,14 +39,14 @@ SUCCESS_THRESHOLD = 0.8
 MAX_NON_NEW_STEPS = 1000
 
 PHASES = {
-    1: {"radii": (2.5, 7.5), "obst": (0, 2), "obs_rad": (0.5, 1.0), "max_steps": 4000, "goal": 0.90},
-    2: {"radii": (7.5, 10.0), "obst": (1, 3), "obs_rad": (0.7, 1.5), "max_steps": 6000, "goal": 0.90},
-    3: {"radii": (10.0, 12.0), "obst": (2, 4), "obs_rad": (1.0, 2.0), "max_steps": 8000, "goal": 0.95},
-    4: {"radii": (12.0, 14.0), "obst": (3, 5), "obs_rad": (1.2, 2.5), "max_steps": 10000, "goal": 0.95},
-    5: {"radii": (14.0, 16.0), "obst": (4, 6), "obs_rad": (1.5, 3.0), "max_steps": 14000, "goal": 0.97},
-    6: {"radii": (16.0, 18.0), "obst": (5, 8), "obs_rad": (1.5, 3.5), "max_steps": 18000, "goal": 0.97},
-    7: {"radii": (18.0, 20.0), "obst": (6, 10), "obs_rad": (2.0, 4.0), "max_steps": 24000, "goal": 0.99},
-    8: {"radii": (20.0, 24.0), "obst": (8, 12), "obs_rad": (2.0, 5.0), "max_steps": 30000, "goal": 0.99},
+    1: {"radii": (2.5, 7.5), "obst": (1, 2), "obs_rad": (0.5, 1.0), "max_steps": 4000, "goal": 0.90},
+    2: {"radii": (7.5, 10.0), "obst": (2, 3), "obs_rad": (0.7, 1.5), "max_steps": 6000, "goal": 0.93},
+    3: {"radii": (10.0, 12.0), "obst": (3, 4), "obs_rad": (1.0, 2.0), "max_steps": 8000, "goal": 0.95},
+    4: {"radii": (12.0, 14.0), "obst": (4, 5), "obs_rad": (1.2, 2.5), "max_steps": 10000, "goal": 0.97},
+    5: {"radii": (14.0, 16.0), "obst": (5, 6), "obs_rad": (1.5, 3.0), "max_steps": 14000, "goal": 0.98},
+    6: {"radii": (16.0, 18.0), "obst": (6, 8), "obs_rad": (1.5, 3.5), "max_steps": 18000, "goal": 0.99},
+    7: {"radii": (18.0, 20.0), "obst": (8, 10), "obs_rad": (2.0, 4.0), "max_steps": 24000, "goal": 0.999},
+    8: {"radii": (20.0, 24.0), "obst": (10, 12), "obs_rad": (2.0, 5.0), "max_steps": 30000, "goal": 0.9999},
 }
 
 
