@@ -40,14 +40,14 @@ SUCCESS_THRESHOLD = 0.8
 MAX_NON_NEW_STEPS = 1000
 
 PHASES = {
-    1: {"radii": (2.5, 7.5), "obst": (0, 4), "max_steps": 4000, "goal": 0.90},
-    2: {"radii": (7.5, 10.0), "obst": (4, 10), "max_steps": 6000, "goal": 0.90},
-    3: {"radii": (10.0, 12.0), "obst": (10, 16), "max_steps": 8000, "goal": 0.95},
-    4: {"radii": (12.0, 14.0), "obst": (16, 24), "max_steps": 10000, "goal": 0.95},
-    5: {"radii": (14.0, 16.0), "obst": (24, 32), "max_steps": 14000, "goal": 0.97},
-    6: {"radii": (16.0, 18.0), "obst": (32, 40), "max_steps": 18000, "goal": 0.97},
-    7: {"radii": (18.0, 20.0), "obst": (40, 50), "max_steps": 24000, "goal": 0.99},
-    8: {"radii": (20.0, 24.0), "obst": (50, 60), "max_steps": 30000, "goal": 0.99},
+    1: {"radii": (2.5, 7.5), "obst": (0, 2), "obs_rad": (0.5, 1.0), "max_steps": 4000, "goal": 0.90},
+    2: {"radii": (7.5, 10.0), "obst": (1, 3), "obs_rad": (0.7, 1.5), "max_steps": 6000, "goal": 0.90},
+    3: {"radii": (10.0, 12.0), "obst": (2, 4), "obs_rad": (1.0, 2.0), "max_steps": 8000, "goal": 0.95},
+    4: {"radii": (12.0, 14.0), "obst": (3, 5), "obs_rad": (1.2, 2.5), "max_steps": 10000, "goal": 0.95},
+    5: {"radii": (14.0, 16.0), "obst": (4, 6), "obs_rad": (1.5, 3.0), "max_steps": 14000, "goal": 0.97},
+    6: {"radii": (16.0, 18.0), "obst": (5, 8), "obs_rad": (1.5, 3.5), "max_steps": 18000, "goal": 0.97},
+    7: {"radii": (18.0, 20.0), "obst": (6, 10), "obs_rad": (2.0, 4.0), "max_steps": 24000, "goal": 0.99},
+    8: {"radii": (20.0, 24.0), "obst": (8, 12), "obs_rad": (2.0, 5.0), "max_steps": 30000, "goal": 0.99},
 }
 
 
@@ -127,6 +127,7 @@ class RobotCoverageEnv(gym.Env):
         rule = PHASES[self.phase]
         radii_low, radii_high = rule["radii"]
         obst_min, obst_max = rule["obst"]
+        obs_rad_min, obs_rad_max = rule["obs_rad"]
 
         while True:
             angles = np.sort(self.np_random.uniform(0, 2 * np.pi, 12))
@@ -146,7 +147,7 @@ class RobotCoverageEnv(gym.Env):
                 ox = self.np_random.uniform(lo + margin, hi - margin)
                 oy = self.np_random.uniform(la + margin, ha - margin)
                 obs_poly = (
-                    Point(ox, oy).buffer(self.np_random.uniform(0.3, 1.0)).simplify(0.2)
+                    Point(ox, oy).buffer(self.np_random.uniform(obs_rad_min, obs_rad_max)).simplify(0.2)
                 )
                 if outer.contains(obs_poly):
                     obstacles.append(obs_poly)
@@ -251,7 +252,17 @@ class RobotCoverageEnv(gym.Env):
             self.spawn_safety_map = obs_for_dilation
 
     def _compute_coverable_area(self):
-        self.coverable_area = ((self.field_grid > 0) & (self.virtual_wall_map == 0)).astype(np.uint8)
+        valid_positions = ((self.field_grid > 0) & (self.virtual_wall_map == 0)).astype(np.uint8)
+
+        free_space = (self.collision_map == 0).astype(np.uint8)
+        num_labels, labels = cv2.connectedComponents(free_space, connectivity=4)
+
+        px = self._m_to_grid_px(self.agent_pos_m)
+        spawn_label = labels[px[1], px[0]]
+
+        reachable_mask = (labels == spawn_label).astype(np.uint8)
+
+        self.coverable_area = (valid_positions & reachable_mask)
 
     def _init_maps(self):
         self.obstacle_map = np.zeros(
@@ -612,13 +623,29 @@ class RobotCoverageEnv(gym.Env):
         self.last_v = 0.0
         self.last_w = 0.0
 
-        self.field = self._generate_random_field()
-        self._rasterize_field()
-        self.true_obstacle_map = (1 - self.field_grid).astype(np.float32)
-        self._compute_static_maps()
-        self._compute_spawn_safety_map()
-        self._compute_coverable_area()
-        self._get_safe_spawn()
+        for attempt in range(MAX_FIELD_ATTEMPTS):
+            self.field = self._generate_random_field()
+            self._rasterize_field()
+            self.true_obstacle_map = (1 - self.field_grid).astype(np.float32)
+            self._compute_static_maps()
+            self._compute_spawn_safety_map()
+
+            try:
+                self._get_safe_spawn()
+            except RuntimeError:
+                continue
+
+            self._compute_coverable_area()
+
+            valid_positions = ((self.field_grid > 0) & (self.virtual_wall_map == 0)).astype(np.uint8)
+            total_valid = valid_positions.sum()
+            reachable_valid = self.coverable_area.sum()
+
+            if total_valid > 0 and (reachable_valid / total_valid) > 0.50:
+                break
+        else:
+            print(f"Warning: Failed to generate a solvable field after {MAX_FIELD_ATTEMPTS} attempts.")
+
         for _ in range(11):
             self.position_history.append((self.agent_pos_m.copy(), self.agent_heading))
         self._init_maps()
