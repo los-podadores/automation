@@ -1,5 +1,4 @@
 import math
-from collections import deque
 
 import cv2
 import gymnasium as gym
@@ -111,8 +110,6 @@ class RobotCoverageEnv(gym.Env):
         self.global_tv = 0.0
         self.local_coverage_old = None
         self.local_known_obstacles_old = None
-        self.position_history = deque(maxlen=11)
-        self.rewind_streak = 0
         self._last_swept_bbox = None  # legacy attribute, no longer populated
         self._last_stamp_bbox = (
             None  # (min_x, max_x, min_y, max_y) of last _stamp_coverage window
@@ -619,7 +616,6 @@ class RobotCoverageEnv(gym.Env):
         self.current_step = 0
         self.non_new_steps = 0
         self.num_collisions = 0
-        self.rewind_streak = 0
         self.last_v = 0.0
         self.last_w = 0.0
 
@@ -646,8 +642,6 @@ class RobotCoverageEnv(gym.Env):
         else:
             print(f"Warning: Failed to generate a solvable field after {MAX_FIELD_ATTEMPTS} attempts.")
 
-        for _ in range(11):
-            self.position_history.append((self.agent_pos_m.copy(), self.agent_heading))
         self._init_maps()
 
         self._noisy_pos_m = self.agent_pos_m.copy() + np.random.normal(
@@ -682,8 +676,6 @@ class RobotCoverageEnv(gym.Env):
         old_pos = self.agent_pos_m.copy()
         old_heading = self.agent_heading
 
-        self.position_history.append((self.agent_pos_m.copy(), self.agent_heading))
-
         new_heading = (self.agent_heading + ang_vel * DT) % (2 * math.pi)
         inter_heading = self.agent_heading + ang_vel * DT / 2
         dx = lin_vel * DT * math.cos(inter_heading)
@@ -696,20 +688,15 @@ class RobotCoverageEnv(gym.Env):
         if collided:
             self.num_collisions += 1
             self.last_v = 0.0
-            self.last_w = 0.0
+            self.last_w = steering
             reward_coll = REWARD_COLLISION
-            self.agent_pos_m, self.agent_heading = self.position_history[0]
-            self.position_history.popleft()
-            self.rewind_streak += 1
-            if self.rewind_streak >= 5:
-                self.agent_heading = (self.agent_heading + math.pi) % (2 * math.pi)
-                self.rewind_streak = 0
+            self.agent_pos_m = old_pos
+            self.agent_heading = new_heading
         else:
             self.agent_pos_m = new_pos
             self.agent_heading = new_heading
             self.last_v = lin_vel / ROBOT_SPEED_V
             self.last_w = steering
-            self.rewind_streak = 0
 
         self._noisy_pos_m = self.agent_pos_m.copy() + np.random.normal(
             0, POSITION_NOISE, 2
