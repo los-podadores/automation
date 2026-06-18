@@ -13,8 +13,8 @@ ROBOT_RADIUS = ROBOT_SIDE / 2.0
 MAX_STEPS = 15000
 REWARD_BASE_PENALTY = -0.05
 REWARD_COLLISION = -5.0
-REWARD_TV_SCALE = 1.0
-REWARD_TV_MAX = 1.5
+REWARD_TV_SCALE = 1.5
+REWARD_TV_MAX = 2.0
 REWARD_AREA_SCALE = 1.5
 REWARD_AREA_MAX = 2.0
 ROBOT_SPEED_V = 0.26
@@ -768,8 +768,8 @@ class RobotCoverageEnv(gym.Env):
                     self.global_tv += tv_diff
                     reward_tv = -tv_diff
                     reward_tv *= METERS_PER_PIXEL / DT / ROBOT_SPEED_V / 2.5
-                    reward_tv = np.sign(reward_tv) * min(abs(reward_tv), REWARD_TV_MAX)
                     reward_tv *= REWARD_TV_SCALE
+                    reward_tv = np.sign(reward_tv) * min(abs(reward_tv), REWARD_TV_MAX)
 
             self.local_coverage_old = local_cov_new
             self.local_known_obstacles_old = local_obs_new
