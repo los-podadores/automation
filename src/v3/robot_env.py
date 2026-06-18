@@ -229,10 +229,14 @@ class RobotCoverageEnv(gym.Env):
         obs_for_dilation[:, 0] = 1
         obs_for_dilation[:, -1] = 1
 
-        kernel_phys = np.ones((ROBOT_RADIUS_PX * 2 + 1,) * 2, dtype=np.float32)
+        kernel_phys = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (ROBOT_RADIUS_PX * 2 + 1,) * 2
+        )
         self.collision_map = cv2.dilate(obs_for_dilation, kernel_phys, iterations=1)
 
-        kernel_virt = np.ones((VIRTUAL_MARGIN_PX * 2 + 1,) * 2, dtype=np.float32)
+        kernel_virt = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (VIRTUAL_MARGIN_PX * 2 + 1,) * 2
+        )
         self.virtual_wall_map = cv2.dilate(obs_for_dilation, kernel_virt, iterations=1)
 
     def _compute_spawn_safety_map(self):
@@ -668,7 +672,6 @@ class RobotCoverageEnv(gym.Env):
         throttle = float(np.clip(action[0], -1, 1))
         steering = float(np.clip(action[1], -1, 1))
 
-        throttle = (throttle + 1.0) / 2.0
         lin_vel = throttle * ROBOT_SPEED_V
         lin_vel *= 1 - abs(steering) * 0.5
         ang_vel = steering * ROBOT_SPEED_W
@@ -680,9 +683,20 @@ class RobotCoverageEnv(gym.Env):
         inter_heading = self.agent_heading + ang_vel * DT / 2
         dx = lin_vel * DT * math.cos(inter_heading)
         dy = lin_vel * DT * math.sin(inter_heading)
-        new_pos = self.agent_pos_m + np.array([dx, dy])
 
-        collided = self._check_collision(new_pos)
+        test_pos = self.agent_pos_m.copy()
+
+        test_pos[0] += dx
+        col_x = self._check_collision(test_pos)
+        if col_x:
+            test_pos[0] -= dx
+
+        test_pos[1] += dy
+        col_y = self._check_collision(test_pos)
+        if col_y:
+            test_pos[1] -= dy
+
+        collided = col_x or col_y
         reward_coll = 0.0
 
         if collided:
@@ -690,10 +704,10 @@ class RobotCoverageEnv(gym.Env):
             self.last_v = 0.0
             self.last_w = steering
             reward_coll = REWARD_COLLISION
-            self.agent_pos_m = old_pos
+            self.agent_pos_m = test_pos
             self.agent_heading = new_heading
         else:
-            self.agent_pos_m = new_pos
+            self.agent_pos_m = test_pos
             self.agent_heading = new_heading
             self.last_v = lin_vel / ROBOT_SPEED_V
             self.last_w = steering
