@@ -27,7 +27,7 @@ TOTAL_TIMESTEPS = 2_000_000
 CNN_DIMS = 256
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
-NUM_ENVS = 16
+NUM_ENVS = 20
 N_STEPS = 2048
 
 # Callback freqs are measured in env.step() calls (one per vectorized batch),

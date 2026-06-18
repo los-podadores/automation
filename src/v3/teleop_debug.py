@@ -17,7 +17,7 @@ ENV_SIZE = 700
 PANEL_W = 660
 WINDOW_W = ENV_SIZE + PANEL_W
 WINDOW_H = 980
-TELEOP_ROT_SCALE = 0.4
+TELEOP_ROT_SCALE = 0.1
 
 SENSOR_NAMES = [
     "ray_front_left",
@@ -88,6 +88,10 @@ def draw_env_view(surface, env, x0, y0, toggles):
     if toggles["dilated"]:
         dilated_mask = env.pre_dilated_map > 0
         img[dilated_mask & ~obs_mask] = [50, 140, 200]
+
+    if toggles["coverable"]:
+        coverable_mask = env.coverable_area > 0
+        img[coverable_mask & ~obs_mask] = [0, 180, 180]
 
     img = cv2.resize(img, (ENV_SIZE, ENV_SIZE), interpolation=cv2.INTER_NEAREST)
     img = cv2.cvtColor(img[::-1], cv2.COLOR_BGR2RGB)
@@ -276,6 +280,7 @@ def main():
         "stamped": False,
         "footprint": False,
         "rays": False,
+        "coverable": False,
     }
 
     fps_smooth = 0.0
@@ -304,6 +309,8 @@ def main():
                     toggles["footprint"] = not toggles["footprint"]
                 elif event.key == pygame.K_g:
                     toggles["rays"] = not toggles["rays"]
+                elif event.key == pygame.K_v:
+                    toggles["coverable"] = not toggles["coverable"]
                 elif event.key in (
                     pygame.K_1,
                     pygame.K_2,
@@ -414,7 +421,16 @@ def main():
                 font_sm,
                 (160, 160, 160),
             )
-            y += 20
+            y += 15
+            draw_text(
+                screen,
+                " V: coverable field",
+                panel_x + 10,
+                y,
+                font_sm,
+                (160, 160, 160),
+            )
+            y += 15
 
         sensors = obs["sensors"]
         draw_text(screen, "SENSORS:", panel_x + 10, y, font_md, (180, 200, 255))
@@ -565,6 +581,7 @@ def main():
             ("stamped", "B: stamp bbox"),
             ("footprint", "F: local footprint"),
             ("rays", "G: ray pixel steps"),
+            ("coverable", "V: coverable field"),
         ]:
             state = "ON" if toggles[key] else "off"
             color = (100, 220, 100) if toggles[key] else (100, 100, 100)

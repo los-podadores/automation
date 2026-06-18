@@ -111,6 +111,7 @@ class RobotCoverageEnv(gym.Env):
         self.local_coverage_old = None
         self.local_known_obstacles_old = None
         self.position_history = deque(maxlen=11)
+        self.rewind_streak = 0
         self._last_swept_bbox = None  # legacy attribute, no longer populated
         self._last_stamp_bbox = (
             None  # (min_x, max_x, min_y, max_y) of last _stamp_coverage window
@@ -328,7 +329,7 @@ class RobotCoverageEnv(gym.Env):
         ix, iy = int(round(pos_p[0])), int(round(pos_p[1]))
         if ix < 0 or ix >= self.grid_size_p or iy < 0 or iy >= self.grid_size_p:
             return True
-        return self.pre_dilated_map[iy, ix] > 0
+        return self.true_obstacle_map[iy, ix] > 0
 
     def _check_collision(self, pos_m):
         if self._is_out_of_bounds(pos_m):
@@ -605,6 +606,7 @@ class RobotCoverageEnv(gym.Env):
         self.current_step = 0
         self.non_new_steps = 0
         self.num_collisions = 0
+        self.rewind_streak = 0
         self.last_v = 0.0
         self.last_w = 0.0
 
@@ -643,6 +645,7 @@ class RobotCoverageEnv(gym.Env):
         throttle = float(np.clip(action[0], -1, 1))
         steering = float(np.clip(action[1], -1, 1))
 
+        throttle = (throttle + 1.0) / 2.0
         lin_vel = throttle * ROBOT_SPEED_V
         lin_vel *= 1 - abs(steering) * 0.5
         ang_vel = steering * ROBOT_SPEED_W
@@ -668,11 +671,16 @@ class RobotCoverageEnv(gym.Env):
             reward_coll = REWARD_COLLISION
             self.agent_pos_m, self.agent_heading = self.position_history[0]
             self.position_history.popleft()
+            self.rewind_streak += 1
+            if self.rewind_streak >= 5:
+                self.agent_heading = (self.agent_heading + math.pi) % (2 * math.pi)
+                self.rewind_streak = 0
         else:
             self.agent_pos_m = new_pos
             self.agent_heading = new_heading
             self.last_v = lin_vel / ROBOT_SPEED_V
             self.last_w = steering
+            self.rewind_streak = 0
 
         self._noisy_pos_m = self.agent_pos_m.copy() + np.random.normal(
             0, POSITION_NOISE, 2
