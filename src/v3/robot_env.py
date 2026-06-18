@@ -13,8 +13,8 @@ ROBOT_RADIUS = ROBOT_SIDE / 2.0
 MAX_STEPS = 15000
 REWARD_BASE_PENALTY = -0.05
 REWARD_COLLISION = -5.0
-REWARD_TV_SCALE = 1.5
-REWARD_TV_MAX = 2.0
+REWARD_TV_SCALE = 2.0
+REWARD_TV_MAX = 3.0
 REWARD_AREA_SCALE = 1.5
 REWARD_AREA_MAX = 2.0
 ROBOT_SPEED_V = 0.26
@@ -39,13 +39,13 @@ SUCCESS_THRESHOLD = 0.8
 MAX_NON_NEW_STEPS = 1000
 
 PHASES = {
-    1: {"radii": (2.5, 7.5), "obst": (1, 2), "obs_rad": (0.5, 1.0), "max_steps": 4000, "goal": 0.90},
-    2: {"radii": (7.5, 10.0), "obst": (2, 3), "obs_rad": (0.7, 1.5), "max_steps": 6000, "goal": 0.93},
-    3: {"radii": (10.0, 12.0), "obst": (3, 4), "obs_rad": (1.0, 2.0), "max_steps": 8000, "goal": 0.95},
-    4: {"radii": (12.0, 14.0), "obst": (4, 5), "obs_rad": (1.2, 2.5), "max_steps": 10000, "goal": 0.97},
-    5: {"radii": (14.0, 16.0), "obst": (5, 6), "obs_rad": (1.5, 3.0), "max_steps": 14000, "goal": 0.98},
-    6: {"radii": (16.0, 18.0), "obst": (6, 8), "obs_rad": (1.5, 3.5), "max_steps": 18000, "goal": 0.99},
-    7: {"radii": (18.0, 20.0), "obst": (8, 10), "obs_rad": (2.0, 4.0), "max_steps": 24000, "goal": 0.999},
+    1: {"radii": (2.5, 7.5), "obst": (1, 2), "obs_rad": (0.5, 1.0), "max_steps": 4000, "goal": 0.999},
+    2: {"radii": (7.5, 10.0), "obst": (2, 3), "obs_rad": (0.7, 1.5), "max_steps": 6000, "goal": 0.9991},
+    3: {"radii": (10.0, 12.0), "obst": (3, 4), "obs_rad": (1.0, 2.0), "max_steps": 8000, "goal": 0.9993},
+    4: {"radii": (12.0, 14.0), "obst": (4, 5), "obs_rad": (1.2, 2.5), "max_steps": 10000, "goal": 0.9994},
+    5: {"radii": (14.0, 16.0), "obst": (5, 6), "obs_rad": (1.5, 3.0), "max_steps": 14000, "goal": 0.9995},
+    6: {"radii": (16.0, 18.0), "obst": (6, 8), "obs_rad": (1.5, 3.5), "max_steps": 18000, "goal": 0.9996},
+    7: {"radii": (18.0, 20.0), "obst": (8, 10), "obs_rad": (2.0, 4.0), "max_steps": 24000, "goal": 0.9998},
     8: {"radii": (20.0, 24.0), "obst": (10, 12), "obs_rad": (2.0, 5.0), "max_steps": 30000, "goal": 0.9999},
 }
 
