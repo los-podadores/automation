@@ -1,4 +1,5 @@
 import math
+from collections import deque
 
 import cv2
 import gymnasium as gym
@@ -12,7 +13,7 @@ ROBOT_SIDE = 1.0
 ROBOT_RADIUS = ROBOT_SIDE / 2.0
 MAX_STEPS = 15000
 REWARD_BASE_PENALTY = -0.05
-REWARD_COLLISION = -3.0
+REWARD_COLLISION = -5.0
 REWARD_TV_SCALE = 1.0
 REWARD_TV_MAX = 1.5
 REWARD_AREA_SCALE = 1.5
@@ -109,6 +110,7 @@ class RobotCoverageEnv(gym.Env):
         self.global_tv = 0.0
         self.local_coverage_old = None
         self.local_known_obstacles_old = None
+        self.position_history = deque(maxlen=11)
         self._last_swept_bbox = None  # legacy attribute, no longer populated
         self._last_stamp_bbox = (
             None  # (min_x, max_x, min_y, max_y) of last _stamp_coverage window
@@ -613,6 +615,8 @@ class RobotCoverageEnv(gym.Env):
         self._compute_spawn_safety_map()
         self._compute_coverable_area()
         self._get_safe_spawn()
+        for _ in range(11):
+            self.position_history.append((self.agent_pos_m.copy(), self.agent_heading))
         self._init_maps()
 
         self._noisy_pos_m = self.agent_pos_m.copy() + np.random.normal(
@@ -639,13 +643,14 @@ class RobotCoverageEnv(gym.Env):
         throttle = float(np.clip(action[0], -1, 1))
         steering = float(np.clip(action[1], -1, 1))
 
-        throttle = (throttle + 1.0) / 2.0
         lin_vel = throttle * ROBOT_SPEED_V
         lin_vel *= 1 - abs(steering) * 0.5
         ang_vel = steering * ROBOT_SPEED_W
 
         old_pos = self.agent_pos_m.copy()
         old_heading = self.agent_heading
+
+        self.position_history.append((self.agent_pos_m.copy(), self.agent_heading))
 
         new_heading = (self.agent_heading + ang_vel * DT) % (2 * math.pi)
         inter_heading = self.agent_heading + ang_vel * DT / 2
@@ -661,6 +666,8 @@ class RobotCoverageEnv(gym.Env):
             self.last_v = 0.0
             self.last_w = 0.0
             reward_coll = REWARD_COLLISION
+            self.agent_pos_m, self.agent_heading = self.position_history[0]
+            self.position_history.popleft()
         else:
             self.agent_pos_m = new_pos
             self.agent_heading = new_heading
@@ -729,7 +736,11 @@ class RobotCoverageEnv(gym.Env):
             self.local_coverage_old = local_cov_new
             self.local_known_obstacles_old = local_obs_new
 
-        reward = reward_area + reward_tv + reward_coll + REWARD_BASE_PENALTY
+        if new_cells > 0:
+            reward_const = 0.0
+        else:
+            reward_const = REWARD_BASE_PENALTY
+        reward = reward_area + reward_tv + reward_coll + reward_const
 
         terminated = False
         goal = PHASES[self.phase]["goal"]
