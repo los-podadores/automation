@@ -2,7 +2,6 @@ import os
 from collections import deque
 
 import numpy as np
-
 from architectures import StackedMapFeaturesExtractor
 from robot_env import (
     MAP_SIZE,
@@ -23,7 +22,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 LEARNING_RATE = 3e-4
-TOTAL_TIMESTEPS = 2_000_000
+TOTAL_TIMESTEPS = 8_000_000
 CNN_DIMS = 256
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
@@ -74,7 +73,10 @@ class CurriculumCallback(BaseCallback):
 
         self.logger.record("curriculum/phase", self.current_phase)
         if len(self.success_window) >= SUCCESS_WINDOW:
-            self.logger.record("curriculum/success_rate", sum(self.success_window) / len(self.success_window))
+            self.logger.record(
+                "curriculum/success_rate",
+                sum(self.success_window) / len(self.success_window),
+            )
 
         return True
 

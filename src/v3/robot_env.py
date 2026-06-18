@@ -669,7 +669,7 @@ class RobotCoverageEnv(gym.Env):
 
     def step(self, action):
         self.current_step += 1
-        throttle = float(np.clip(action[0], -1, 1))
+        throttle = float((action[0] + 1) / 2)
         steering = float(np.clip(action[1], -1, 1))
 
         lin_vel = throttle * ROBOT_SPEED_V
