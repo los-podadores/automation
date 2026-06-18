@@ -288,13 +288,7 @@ class RobotCoverageEnv(gym.Env):
         self.coverage_in_pixels = int(cov.sum())
         self.coverage_in_percent = self.coverage_in_pixels / self.total_cells
 
-        local_cov = self._get_local_crop(
-            self.coverage_map, self.agent_pos_m, ROBOT_RADIUS
-        )
-        local_obs = self._get_local_crop(
-            self.virtual_wall_map, self.agent_pos_m, ROBOT_RADIUS
-        )
-        self.global_tv = total_variation(local_cov, local_obs)
+        self.global_tv = total_variation(self.coverage_map, self.virtual_wall_map)
 
     def _m_to_p(self, pos_m):
         return (pos_m - self.render_offset) * self.pixels_per_meter
@@ -390,17 +384,13 @@ class RobotCoverageEnv(gym.Env):
         nx_local = new_px[0] - min_x
         ny_local = new_px[1] - min_y
 
-        dist_sq = (nx_local - ox_local) ** 2 + (ny_local - oy_local) ** 2
-        if dist_sq <= 2:
-            cv2.circle(local_mask, (ox_local, oy_local), radius, 1, thickness=-1)
-        else:
-            cv2.line(
-                local_mask,
-                (ox_local, oy_local),
-                (nx_local, ny_local),
-                1,
-                thickness=2 * radius,
-            )
+        cv2.line(
+            local_mask,
+            (ox_local, oy_local),
+            (nx_local, ny_local),
+            1,
+            thickness=2 * radius,
+        )
 
         local_mask[local_obs > 0] = 0
 
@@ -465,7 +455,7 @@ class RobotCoverageEnv(gym.Env):
 
         rot = np.eye(3)
         rot[:2] = cv2.getRotationMatrix2D(
-            center=(0, 0), angle=90 - heading_deg, scale=1
+            center=(0, 0), angle=heading_deg, scale=1
         )
 
         t2 = np.eye(3)
@@ -753,16 +743,16 @@ class RobotCoverageEnv(gym.Env):
             local_obs_old = self.local_known_obstacles_old
 
             radius_m = ROBOT_RADIUS
-            local_cov_new = self._get_local_crop(
-                self.coverage_map, self.agent_pos_m, radius_m
+            local_cov_new_aligned = self._get_local_crop(
+                self.coverage_map, old_pos, radius_m
             )
-            local_obs_new = self._get_local_crop(
-                self.virtual_wall_map, self.agent_pos_m, radius_m
+            local_obs_new_aligned = self._get_local_crop(
+                self.virtual_wall_map, old_pos, radius_m
             )
 
             if local_cov_old is not None and local_obs_old is not None:
-                if local_cov_new.shape == local_cov_old.shape:
-                    tv_new = total_variation(local_cov_new, local_obs_new)
+                if local_cov_new_aligned.shape == local_cov_old.shape:
+                    tv_new = total_variation(local_cov_new_aligned, local_obs_new_aligned)
                     tv_old = total_variation(local_cov_old, local_obs_old)
                     tv_diff = tv_new - tv_old
                     self.global_tv += tv_diff
@@ -771,8 +761,12 @@ class RobotCoverageEnv(gym.Env):
                     reward_tv *= REWARD_TV_SCALE
                     reward_tv = np.sign(reward_tv) * min(abs(reward_tv), REWARD_TV_MAX)
 
-            self.local_coverage_old = local_cov_new
-            self.local_known_obstacles_old = local_obs_new
+            self.local_coverage_old = self._get_local_crop(
+                self.coverage_map, self.agent_pos_m, radius_m
+            )
+            self.local_known_obstacles_old = self._get_local_crop(
+                self.virtual_wall_map, self.agent_pos_m, radius_m
+            )
 
         if new_cells > 0:
             reward_const = 0.0
