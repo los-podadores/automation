@@ -5,6 +5,7 @@ from collections import deque
 import numpy as np
 from architectures import StackedMapFeaturesExtractor
 from robot_env import (
+    CELLS_MISSED_THRESHOLD,
     MAP_SIZE,
     NUM_MAPS,
     PHASES,
@@ -48,17 +49,16 @@ class CurriculumCallback(BaseCallback):
         self.current_phase = 1
 
     def _on_step(self) -> bool:
-        coverages = []
+        missed_cells = []
         for i, done in enumerate(self.locals.get("dones", [])):
             if done:
                 info = self.locals["infos"][i]
-                cov = info.get("coverage_percent", 0.0)
-                coverages.append(cov)
-                goal = PHASES[self.current_phase]["goal"]
-                self.success_window.append(cov >= goal)
+                cells_missed = info.get("cells_missed", 999)
+                missed_cells.append(cells_missed)
+                self.success_window.append(cells_missed < CELLS_MISSED_THRESHOLD)
 
-        if coverages:
-            self.logger.record("field/coverage_mean", np.mean(coverages))
+        if missed_cells:
+            self.logger.record("field/cells_missed_mean", np.mean(missed_cells))
 
         if len(self.success_window) >= SUCCESS_WINDOW:
             rate = sum(self.success_window) / len(self.success_window)

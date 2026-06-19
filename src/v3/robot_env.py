@@ -44,64 +44,58 @@ SPAWN_SAFETY_RADIUS_PX = 1
 MAX_FIELD_ATTEMPTS = 100
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
-MAX_NON_NEW_STEPS = 1000
+MAX_NON_NEW_STEPS = 750
+CELLS_MISSED_THRESHOLD = 20
+PHASE_WEIGHT_DECAY = 0.5
 
 PHASES = {
     1: {
-        "radii": (2.5, 7.5),
+        "radii": (2.5, 6.0),
         "obst": (1, 2),
-        "obs_rad": (0.5, 1.0),
-        "max_steps": 4000,
-        "goal": 0.999,
+        "obs_rad": (0.4, 0.8),
+        "max_steps": 3500,
     },
     2: {
-        "radii": (7.5, 10.0),
+        "radii": (6.0, 8.0),
         "obst": (2, 3),
-        "obs_rad": (0.7, 1.5),
-        "max_steps": 6000,
-        "goal": 0.9991,
+        "obs_rad": (0.5, 1.0),
+        "max_steps": 3500,
     },
     3: {
-        "radii": (10.0, 12.0),
-        "obst": (3, 4),
-        "obs_rad": (1.0, 2.0),
-        "max_steps": 8000,
-        "goal": 0.9993,
+        "radii": (8.0, 9.5),
+        "obst": (2, 3),
+        "obs_rad": (0.7, 1.5),
+        "max_steps": 3500,
     },
     4: {
-        "radii": (12.0, 14.0),
-        "obst": (4, 5),
-        "obs_rad": (1.2, 2.5),
-        "max_steps": 10000,
-        "goal": 0.9994,
+        "radii": (9.5, 11.0),
+        "obst": (3, 4),
+        "obs_rad": (0.8, 2.0),
+        "max_steps": 3500,
     },
     5: {
-        "radii": (14.0, 16.0),
-        "obst": (5, 6),
-        "obs_rad": (1.5, 3.0),
-        "max_steps": 14000,
-        "goal": 0.9995,
+        "radii": (11.0, 13.0),
+        "obst": (4, 5),
+        "obs_rad": (1.0, 2.5),
+        "max_steps": 3500,
     },
     6: {
-        "radii": (16.0, 18.0),
-        "obst": (6, 8),
-        "obs_rad": (1.5, 3.5),
-        "max_steps": 18000,
-        "goal": 0.9996,
+        "radii": (13.0, 14.5),
+        "obst": (5, 6),
+        "obs_rad": (1.0, 2.5),
+        "max_steps": 3500,
     },
     7: {
-        "radii": (18.0, 20.0),
-        "obst": (8, 10),
-        "obs_rad": (2.0, 4.0),
-        "max_steps": 24000,
-        "goal": 0.9998,
+        "radii": (14.5, 16.0),
+        "obst": (6, 8),
+        "obs_rad": (1.5, 3.0),
+        "max_steps": 3500,
     },
     8: {
-        "radii": (20.0, 24.0),
-        "obst": (10, 12),
-        "obs_rad": (2.0, 5.0),
-        "max_steps": 30000,
-        "goal": 0.9999,
+        "radii": (16.0, 18.0),
+        "obst": (7, 9),
+        "obs_rad": (1.5, 4.0),
+        "max_steps": 3500,
     },
 }
 
@@ -113,6 +107,7 @@ class RobotCoverageEnv(gym.Env):
         super().__init__()
         self.render_mode = render_mode
         self.phase = phase
+        self._active_phase = phase
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
@@ -710,6 +705,8 @@ class RobotCoverageEnv(gym.Env):
         self.last_v = 0.0
         self.last_w = 0.0
 
+        self.phase = self._sample_phase()
+
         for attempt in range(MAX_FIELD_ATTEMPTS):
             self.field = self._generate_random_field()
             self._rasterize_field()
@@ -872,16 +869,15 @@ class RobotCoverageEnv(gym.Env):
             )
 
         if new_cells > 0:
-            reward_const = 0.0
-        else:
             reward_const = REWARD_BASE_PENALTY
+        else:
+            reward_const = 2 * REWARD_BASE_PENALTY
         reward = reward_area + reward_tv + reward_coll + reward_const
 
         terminated = False
-        goal = PHASES[self.phase]["goal"]
 
-        # --- NEW: Terminal Reward Logic ---
-        if self.coverage_in_percent >= goal:
+        cells_missed = self.total_cells - self.coverage_in_pixels
+        if cells_missed < CELLS_MISSED_THRESHOLD:
             terminated = True
             reward += 15.0  # Massive jackpot for finishing the room!
 
@@ -899,11 +895,21 @@ class RobotCoverageEnv(gym.Env):
             "phase": self.phase,
             "num_collisions": self.num_collisions,
             "coverage_percent": self.coverage_in_percent,
+            "cells_missed": cells_missed,
         }
         return obs, reward, terminated, truncated, info
 
     def set_phase(self, phase):
         self.phase = max(1, min(phase, 8))
+        self._active_phase = self.phase
+
+    def _sample_phase(self):
+        current = self._active_phase
+        phases = list(range(1, current + 1))
+        weights = [PHASE_WEIGHT_DECAY ** (current - p) for p in phases]
+        total = sum(weights)
+        probs = [w / total for w in weights]
+        return self.np_random.choice(phases, p=probs)
 
     def close_display(self):
         if self.window is not None:

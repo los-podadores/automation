@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import pygame
 from robot_env import (
+    CELLS_MISSED_THRESHOLD,
     MAP_SIZE,
     NUM_MAPS,
     PHASES,
@@ -364,9 +365,14 @@ def main():
         )
         y += 20
 
-        goal = PHASES[env.phase]["goal"] * 100
+        cells_missed = env.total_cells - env.coverage_in_pixels
         draw_text(
-            screen, f" goal: {goal:.0f}%", panel_x + 10, y, font_sm, (200, 200, 200)
+            screen,
+            f" cells missed: {cells_missed} (threshold: {CELLS_MISSED_THRESHOLD})",
+            panel_x + 10,
+            y,
+            font_sm,
+            (200, 200, 200),
         )
         y += 22
 
