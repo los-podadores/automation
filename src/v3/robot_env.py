@@ -29,9 +29,9 @@ ROBOT_SPEED_V = 0.26
 ROBOT_SPEED_W = 1.0
 DT = 0.5
 METERS_PER_PIXEL = 0.1
-NUM_MAPS = 3
+NUM_MAPS = 4
 MAP_SIZE = 32
-SCALE_FACTOR = 4
+SCALES = [1, 6, 11, 16]
 SENSOR_DIM = 8
 NUM_RAYS = 6
 RAY_MAX_DIST = 1
@@ -580,8 +580,8 @@ class RobotCoverageEnv(gym.Env):
 
     def _get_multi_scale_map(self, world_map, pad_value):
         ms = np.zeros((NUM_MAPS, MAP_SIZE, MAP_SIZE), dtype=np.float32)
-        for i in range(NUM_MAPS):
-            ms[i] = self._get_relative_map(world_map, pad_value, SCALE_FACTOR**i)
+        for i, s in enumerate(SCALES):
+            ms[i] = self._get_relative_map(world_map, pad_value, s)
         return ms
 
     def _local_to_global(self, lx, ly):
@@ -921,12 +921,16 @@ class RobotCoverageEnv(gym.Env):
             return
 
         if toggles is None:
-            toggles = getattr(self, "render_toggles", {
-                "dilated": False,
-                "stamped": False,
-                "rays": False,
-                "coverable": False,
-            })
+            toggles = getattr(
+                self,
+                "render_toggles",
+                {
+                    "dilated": False,
+                    "stamped": False,
+                    "rays": False,
+                    "coverable": False,
+                },
+            )
 
         if self.window is None:
             if not pygame.get_init():
@@ -979,7 +983,9 @@ class RobotCoverageEnv(gym.Env):
                 img[coverable_mask] = [0, 180, 180]
 
         obs_mask = self.obstacle_map > 0
-        img[obs_mask] = (0.5 * img[obs_mask] + 0.5 * np.array([200, 80, 80])).astype(np.uint8)
+        img[obs_mask] = (0.5 * img[obs_mask] + 0.5 * np.array([200, 80, 80])).astype(
+            np.uint8
+        )
 
         img = cv2.resize(img, (ws, ws), interpolation=cv2.INTER_NEAREST)
         img = cv2.cvtColor(img[::-1], cv2.COLOR_BGR2RGB)
@@ -1023,7 +1029,14 @@ class RobotCoverageEnv(gym.Env):
             local_pt(0, -a / 2),
             local_pt(-a / 2, 0),
         ]
-        ray_angles = [math.pi / 4, 0.0, -math.pi / 4, math.pi / 2, -math.pi / 2, math.pi]
+        ray_angles = [
+            math.pi / 4,
+            0.0,
+            -math.pi / 4,
+            math.pi / 2,
+            -math.pi / 2,
+            math.pi,
+        ]
         sensors, _ = self._compute_sensors()
 
         for i, (origin, ang_off) in enumerate(zip(origins, ray_angles)):
@@ -1033,7 +1046,9 @@ class RobotCoverageEnv(gym.Env):
                 origin[0] + math.cos(ang) * dist,
                 origin[1] + math.sin(ang) * dist,
             )
-            pygame.draw.line(canvas, RAY_COLORS[i], to_screen(*origin), to_screen(*end), 2)
+            pygame.draw.line(
+                canvas, RAY_COLORS[i], to_screen(*origin), to_screen(*end), 2
+            )
             pygame.draw.circle(canvas, (255, 255, 255), to_screen(*end), 3)
             pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(*origin), 3)
 
@@ -1052,7 +1067,9 @@ class RobotCoverageEnv(gym.Env):
                         if 0 <= cx < self.grid_size_p and 0 <= cy < self.grid_size_p:
                             wx = cx * METERS_PER_PIXEL + self.render_offset[0]
                             wy = cy * METERS_PER_PIXEL + self.render_offset[1]
-                            pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(wx, wy), 1)
+                            pygame.draw.circle(
+                                canvas, RAY_COLORS[i], to_screen(wx, wy), 1
+                            )
                         if cx == ex_p and cy == ey_p:
                             break
                         e2 = 2 * err
@@ -1063,7 +1080,10 @@ class RobotCoverageEnv(gym.Env):
                             err += adx
                             cy += sy_step
 
-        if toggles.get("stamped", False) and getattr(self, "_last_stamp_bbox", None) is not None:
+        if (
+            toggles.get("stamped", False)
+            and getattr(self, "_last_stamp_bbox", None) is not None
+        ):
             bb = self._last_stamp_bbox
             min_x, max_x, min_y, max_y = bb
             corners_bb = [

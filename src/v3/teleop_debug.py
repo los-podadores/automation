@@ -6,6 +6,7 @@ import numpy as np
 import pygame
 from robot_env import (
     MAP_SIZE,
+    NUM_MAPS,
     PHASES,
     REWARD_BASE_PENALTY,
     ROBOT_RADIUS_PX,
@@ -61,17 +62,21 @@ def draw_bar(surface, x, y, w, h, value, max_val, color, bg=(50, 50, 50)):
 
 def draw_obs_maps(surface, obs, panel_x, y, font):
     draw_text(
-        surface, "MULTI-SCALE MAPS (3 scales):", panel_x + 10, y, font, (180, 200, 255)
+        surface,
+        f"MULTI-SCALE MAPS ({NUM_MAPS} scales):",
+        panel_x + 10,
+        y,
+        font,
+        (180, 200, 255),
     )
     y += 18
 
     keys = ["coverage", "obstacles", "frontier"]
     map_px = 120
-    num_scales = 3
     col_gap = 12
     row_gap = 6
 
-    for scale in range(num_scales):
+    for scale in range(NUM_MAPS):
         draw_text(surface, f"S{scale}:", panel_x + 10, y, font, (150, 150, 150))
         for i, (key, name, color) in enumerate(zip(keys, MAP_NAMES, MAP_COLORS)):
             cx = panel_x + 40 + i * (map_px + col_gap)
@@ -95,7 +100,9 @@ def draw_obs_maps(surface, obs, panel_x, y, font):
 
 
 def draw_footprint_inset(surface, env, panel_x, y, font, inset_px=SWATCH_SIZE):
-    draw_text(surface, "ROBOT FOOTPRINT (local):", panel_x + 10, y, font, (180, 200, 255))
+    draw_text(
+        surface, "ROBOT FOOTPRINT (local):", panel_x + 10, y, font, (180, 200, 255)
+    )
     y += 18
     footprint = env._draw_robot_footprint_local(
         env.agent_pos_m, env.agent_heading, local_size=inset_px

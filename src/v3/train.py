@@ -1,3 +1,4 @@
+import argparse
 import os
 from collections import deque
 
@@ -22,7 +23,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 LEARNING_RATE = 3e-4
-TOTAL_TIMESTEPS = 8_000_000
+TOTAL_TIMESTEPS = 16_000_000
 CNN_DIMS = 256
 SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
@@ -78,6 +79,31 @@ class CurriculumCallback(BaseCallback):
         return True
 
 
+def load_model(model_path, env, log_dir):
+    print(f"Loading model from {model_path}")
+    model = PPO.load(model_path, env=env, tensorboard_log=log_dir)
+
+    phase_path = model_path.replace(".zip", "_phase.pkl")
+    initial_phase = 1
+    if os.path.exists(phase_path):
+        import pickle
+
+        with open(phase_path, "rb") as f:
+            initial_phase = pickle.load(f)
+        print(f"Resuming curriculum from phase {initial_phase}")
+
+    return model, initial_phase
+
+
+def save_model(model, path, phase):
+    model.save(path)
+    phase_path = path.replace(".zip", "_phase.pkl")
+    import pickle
+
+    with open(phase_path, "wb") as f:
+        pickle.dump(phase, f)
+
+
 def make_env(phase=1, render_mode=None):
     def _init():
         env = RobotCoverageEnv(render_mode=render_mode, phase=phase)
@@ -90,9 +116,14 @@ def make_env(phase=1, render_mode=None):
 
 
 def main():
-    print("Initializing training environments...")
-    env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
-    check_env(RobotCoverageEnv(phase=1), warn=True)
+    parser = argparse.ArgumentParser(description="Train PPO model for robot coverage")
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to a saved model checkpoint to resume training from",
+    )
+    args = parser.parse_args()
 
     log_dir = "./logs/v3/"
     model_dir = "./models/v3/"
@@ -111,23 +142,34 @@ def main():
         net_arch=dict(pi=[CNN_DIMS, CNN_DIMS], vf=[CNN_DIMS, CNN_DIMS]),
     )
 
-    model = PPO(
-        policy="MultiInputPolicy",
-        env=env,
-        learning_rate=LEARNING_RATE,
-        n_steps=N_STEPS,
-        batch_size=BATCH_SIZE,
-        n_epochs=N_EPOCHS,
-        gamma=GAMMA,
-        gae_lambda=GAE_LAMBDA,
-        clip_range=CLIP_RANGE,
-        ent_coef=ENT_COEF,
-        vf_coef=VF_COEF,
-        max_grad_norm=MAX_GRAD_NORM,
-        policy_kwargs=policy_kwargs,
-        verbose=1,
-        tensorboard_log=log_dir,
-    )
+    initial_phase = 1
+    if args.resume:
+        env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
+        check_env(RobotCoverageEnv(phase=1), warn=True)
+        model, initial_phase = load_model(args.resume, env, log_dir)
+    else:
+        print("Initializing training environments...")
+        env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
+        check_env(RobotCoverageEnv(phase=1), warn=True)
+        model = PPO(
+            policy="MultiInputPolicy",
+            env=env,
+            learning_rate=LEARNING_RATE,
+            n_steps=N_STEPS,
+            batch_size=BATCH_SIZE,
+            n_epochs=N_EPOCHS,
+            gamma=GAMMA,
+            gae_lambda=GAE_LAMBDA,
+            clip_range=CLIP_RANGE,
+            ent_coef=ENT_COEF,
+            vf_coef=VF_COEF,
+            max_grad_norm=MAX_GRAD_NORM,
+            policy_kwargs=policy_kwargs,
+            verbose=1,
+            tensorboard_log=log_dir,
+        )
+
+    env.env_method("set_phase", initial_phase)
 
     checkpoint_callback = CheckpointCallback(
         save_freq=SAVE_FREQ, save_path=model_dir, name_prefix="ppo_v3"
@@ -144,13 +186,18 @@ def main():
     )
 
     curriculum_callback = CurriculumCallback(verbose=1)
+    curriculum_callback.current_phase = initial_phase
 
     callback_list = CallbackList(
         [checkpoint_callback, eval_callback, curriculum_callback]
     )
 
     model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback_list)
-    model.save(os.path.join(model_dir, "ppo_v3_final"))
+    save_model(
+        model,
+        os.path.join(model_dir, "ppo_v3_final"),
+        curriculum_callback.current_phase,
+    )
     env.close()
     eval_env.close()
 
