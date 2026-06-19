@@ -524,9 +524,17 @@ class RobotCoverageEnv(gym.Env):
             obs = cv2.dilate(obs, k, iterations=1)
         cov[obs > 0] = 0
         free = (cov + obs) == 0
+        
         k3 = np.ones((3, 3), dtype=np.float32)
         cov_dilated = cv2.dilate(cov, k3, iterations=1)
-        return (np.logical_and(cov_dilated, free)).astype(np.float32)
+        
+        # Base frontier
+        frontier = (np.logical_and(cov_dilated, free)).astype(np.float32)
+        
+        # --- NEW: Exaggerate the frontier so it survives 32x32 downsampling ---
+        frontier_exaggerated = cv2.dilate(frontier, k3, iterations=1)
+        
+        return frontier_exaggerated
 
     def _get_transform_matrix(self, scale):
         heading_deg = self._noisy_heading * 180 / math.pi
@@ -863,8 +871,11 @@ class RobotCoverageEnv(gym.Env):
 
         terminated = False
         goal = PHASES[self.phase]["goal"]
+        
+        # --- NEW: Terminal Reward Logic ---
         if self.coverage_in_percent >= goal:
             terminated = True
+            reward += 15.0  # Massive jackpot for finishing the room!
 
         truncated = False
         max_steps = PHASES[self.phase]["max_steps"]
