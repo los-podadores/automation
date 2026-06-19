@@ -28,9 +28,6 @@ SUCCESS_WINDOW = 50
 SUCCESS_THRESHOLD = 0.8
 NUM_ENVS = 20
 N_STEPS = 2048
-
-# Callback freqs are measured in env.step() calls (one per vectorized batch),
-# not individual timesteps. Divide target timestep interval by NUM_ENVS.
 SAVE_FREQ = 200_000 // NUM_ENVS
 EVAL_FREQ = 200_000 // NUM_ENVS
 N_EPOCHS = 4

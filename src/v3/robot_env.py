@@ -174,6 +174,10 @@ class RobotCoverageEnv(gym.Env):
         obst_min, obst_max = rule["obst"]
         obs_rad_min, obs_rad_max = rule["obs_rad"]
 
+        # Calculate absolute minimum safe distance in meters
+        # Robot Radius + Virtual Margin + 0.5m buffer
+        safe_margin_m = (ROBOT_RADIUS_PX + VIRTUAL_MARGIN_PX) * METERS_PER_PIXEL + 0.5
+
         while True:
             angles = np.sort(self.np_random.uniform(0, 2 * np.pi, 12))
             radii = self.np_random.uniform(radii_low, radii_high, 12)
@@ -184,20 +188,33 @@ class RobotCoverageEnv(gym.Env):
                 self.np_random.integers(obst_min, obst_max + 1) if obst_max > 0 else 0
             )
             obstacles = []
-            margin = 1.0
+
             for _ in range(num_obstacles):
                 lo, la, hi, ha = outer.bounds
-                if hi - lo < 2 * margin or ha - la < 2 * margin:
+                # Use the new safe margin to ensure enough room
+                if hi - lo < 2 * safe_margin_m or ha - la < 2 * safe_margin_m:
                     break
-                ox = self.np_random.uniform(lo + margin, hi - margin)
-                oy = self.np_random.uniform(la + margin, ha - margin)
+                ox = self.np_random.uniform(lo + safe_margin_m, hi - safe_margin_m)
+                oy = self.np_random.uniform(la + safe_margin_m, ha - safe_margin_m)
+
                 obs_poly = (
                     Point(ox, oy)
                     .buffer(self.np_random.uniform(obs_rad_min, obs_rad_max))
                     .simplify(0.2)
                 )
-                if outer.contains(obs_poly):
-                    obstacles.append(obs_poly)
+
+                # Check distance against outer boundary AND existing obstacles
+                if (
+                    outer.contains(obs_poly)
+                    and outer.boundary.distance(obs_poly) > safe_margin_m
+                ):
+                    too_close = False
+                    for existing_obs in obstacles:
+                        if obs_poly.distance(existing_obs) < safe_margin_m:
+                            too_close = True
+                            break
+                    if not too_close:
+                        obstacles.append(obs_poly)
 
             field = outer
             for obs in obstacles:
@@ -274,20 +291,34 @@ class RobotCoverageEnv(gym.Env):
 
     def _compute_static_maps(self):
         obs_for_dilation = self.true_obstacle_map.copy()
+        # Ensure borders are treated as obstacles
         obs_for_dilation[0, :] = 1
         obs_for_dilation[-1, :] = 1
         obs_for_dilation[:, 0] = 1
         obs_for_dilation[:, -1] = 1
 
+        # 1. Physical Collision Map (Keep this binary for actual collision logic)
         kernel_phys = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (ROBOT_RADIUS_PX * 2 + 1,) * 2
         )
         self.collision_map = cv2.dilate(obs_for_dilation, kernel_phys, iterations=1)
 
-        kernel_virt = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (VIRTUAL_MARGIN_PX * 2 + 1,) * 2
-        )
-        self.virtual_wall_map = cv2.dilate(obs_for_dilation, kernel_virt, iterations=1)
+        # 2. Virtual Wall Map as a Distance Transform
+        # Get free space (0 where obstacles are, 1 where free)
+        free_space = (obs_for_dilation == 0).astype(np.uint8)
+
+        # Calculate precise Euclidean distance to the nearest 0 (obstacle)
+        dist_transform = cv2.distanceTransform(free_space, cv2.DIST_L2, 5)
+
+        # Normalize so that distance 0 (the wall) becomes 1.0,
+        # fading out to 0.0 at your desired virtual margin.
+        safe_distance_px = float(VIRTUAL_MARGIN_PX + ROBOT_RADIUS_PX)
+
+        # Clip distances beyond the safe margin, then invert
+        dist_clipped = np.clip(dist_transform, 0, safe_distance_px)
+        self.virtual_wall_map = 1.0 - (dist_clipped / safe_distance_px)
+
+        # The agent now sees a soft glow around obstacles instead of a hard blue wall.
 
     def _compute_spawn_safety_map(self):
         safety_r_px = SPAWN_SAFETY_RADIUS_PX
@@ -618,7 +649,7 @@ class RobotCoverageEnv(gym.Env):
         return sensors, hit_points
 
     def _update_obstacle_map_from_sensors(self, hit_points):
-        inflation_radius = VIRTUAL_MARGIN_PX
+        inflation_radius = VIRTUAL_MARGIN_PX + ROBOT_RADIUS_PX
 
         for hp in hit_points:
             if hp is not None:
