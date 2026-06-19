@@ -1,6 +1,7 @@
-import numpy as np
 import os
 import random
+
+import numpy as np
 import torch
 
 
@@ -20,18 +21,6 @@ def seed_everything(seed, env=None):
 
 
 def total_variation(img, img2=None, mode="sym-iso"):
-    """
-    Computes the isotropic discrete total variation of a 2D image.
-
-    If img2 is provided, pixel variation is computed in both img and
-    max(img, img2), keeping the minimum of the two at each pixel.
-    This allows masking with an obstacle map.
-
-    Modes:
-      sym-iso: Symmetric and isotropic (slowest, most accurate)
-      non-sym-iso: Isotropic but not symmetric (faster)
-      non-iso: Non-isotropic and symmetric (fastest)
-    """
     assert mode in ["sym-iso", "non-sym-iso", "non-iso"]
     img = img.astype(float)
     diff1 = np.abs(img[1:, :] - img[:-1, :])

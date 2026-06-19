@@ -6,7 +6,6 @@ import numpy as np
 import pygame
 from robot_env import (
     MAP_SIZE,
-    METERS_PER_PIXEL,
     PHASES,
     REWARD_BASE_PENALTY,
     ROBOT_RADIUS_PX,
@@ -57,149 +56,7 @@ def draw_bar(surface, x, y, w, h, value, max_val, color, bg=(50, 50, 50)):
     pygame.draw.rect(surface, (100, 100, 100), (x, y, w, h), 1)
 
 
-def draw_env_view(surface, env, x0, y0, toggles):
-    canvas = pygame.Surface((ENV_SIZE, ENV_SIZE))
-    canvas.fill((30, 30, 30))
-
-    if env.field is None:
-        surface.blit(canvas, (x0, y0))
-        return
-
-    pad = 5.0
-    minx, miny, maxx, maxy = env.field.bounds
-    width = (maxx - minx) + 2 * pad
-    height = (maxy - miny) + 2 * pad
-    scl = ENV_SIZE / max(width, height)
-    off = np.array([minx - pad, miny - pad])
-
-    def to_screen(wx, wy):
-        px = int((wx - off[0]) * scl)
-        py = int(ENV_SIZE - (wy - off[1]) * scl)
-        return px, py
-
-    img = np.full((env.grid_size_p, env.grid_size_p, 3), 30, dtype=np.uint8)
-    field_mask = env.field_grid > 0
-    img[field_mask] = [220, 220, 220]
-    cov_mask = env.coverage_map > 0
-    img[cov_mask] = [80, 160, 80]
-    obs_mask = env.obstacle_map > 0
-    img[obs_mask] = [200, 80, 80]
-
-    if toggles["dilated"]:
-        dilated_mask = env.virtual_wall_map > 0
-        img[dilated_mask & ~obs_mask] = [50, 140, 200]
-
-    if toggles["coverable"]:
-        coverable_mask = env.coverable_area > 0
-        img[coverable_mask & ~obs_mask] = [0, 180, 180]
-
-    img = cv2.resize(img, (ENV_SIZE, ENV_SIZE), interpolation=cv2.INTER_NEAREST)
-    img = cv2.cvtColor(img[::-1], cv2.COLOR_BGR2RGB)
-    screen_arr = np.transpose(img, (1, 0, 2))
-    surf = pygame.surfarray.make_surface(screen_arr)
-    canvas.blit(surf, (0, 0))
-
-    ext_points = [to_screen(x, y) for x, y in env.field.exterior.coords]
-    pygame.draw.polygon(canvas, (0, 0, 0), ext_points, 2)
-    for interior in env.field.interiors:
-        in_points = [to_screen(x, y) for x, y in interior.coords]
-        pygame.draw.polygon(canvas, (255, 255, 255), in_points)
-        pygame.draw.polygon(canvas, (255, 0, 0), in_points, 1)
-
-    corners = env._get_square_corners(env.agent_pos_m, env.agent_heading)
-    corner_pg = [to_screen(c[0], c[1]) for c in corners]
-    pygame.draw.polygon(canvas, (50, 50, 200), corner_pg)
-
-    hx = env.agent_pos_m[0] + 0.5 * math.cos(env.agent_heading)
-    hy = env.agent_pos_m[1] + 0.5 * math.sin(env.agent_heading)
-    pygame.draw.line(
-        canvas, (0, 255, 0), to_screen(*env.agent_pos_m), to_screen(hx, hy), 2
-    )
-
-    a = 1.0
-    theta = env.agent_heading
-    cos_t = math.cos(theta)
-    sin_t = math.sin(theta)
-
-    def local_pt(lx, ly):
-        return (
-            env.agent_pos_m[0] + lx * cos_t - ly * sin_t,
-            env.agent_pos_m[1] + lx * sin_t + ly * cos_t,
-        )
-
-    origins = [
-        local_pt(a / 2, a / 2),
-        local_pt(a / 2, 0),
-        local_pt(a / 2, -a / 2),
-        local_pt(0, a / 2),
-        local_pt(0, -a / 2),
-        local_pt(-a / 2, 0),
-    ]
-    ray_angles = [math.pi / 4, 0.0, -math.pi / 4, math.pi / 2, -math.pi / 2, math.pi]
-    sensors, _ = env._compute_sensors()
-
-    for i, (origin, ang_off) in enumerate(zip(origins, ray_angles)):
-        ang = theta + ang_off
-        dist = sensors[i]
-        end = (
-            origin[0] + math.cos(ang) * dist,
-            origin[1] + math.sin(ang) * dist,
-        )
-        pygame.draw.line(canvas, RAY_COLORS[i], to_screen(*origin), to_screen(*end), 2)
-        pygame.draw.circle(canvas, (255, 255, 255), to_screen(*end), 3)
-        pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(*origin), 3)
-
-        if toggles["rays"]:
-            ox_p, oy_p = env._m_to_grid_px(np.array(origin))
-            ex_p, ey_p = env._m_to_grid_px(np.array(end))
-            adx = abs(ex_p - ox_p)
-            ady = abs(ey_p - oy_p)
-            if adx > 0 or ady > 0:
-                sx_step = 1 if ex_p > ox_p else -1
-                sy_step = 1 if ey_p > oy_p else -1
-                err = adx - ady
-                cx, cy = ox_p, oy_p
-                max_it = adx + ady + 1
-                for _ in range(max_it):
-                    if 0 <= cx < env.grid_size_p and 0 <= cy < env.grid_size_p:
-                        wx = cx * METERS_PER_PIXEL + env.render_offset[0]
-                        wy = cy * METERS_PER_PIXEL + env.render_offset[1]
-                        pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(wx, wy), 1)
-                    if cx == ex_p and cy == ey_p:
-                        break
-                    e2 = 2 * err
-                    if e2 > -ady:
-                        err -= ady
-                        cx += sx_step
-                    if e2 < adx:
-                        err += adx
-                        cy += sy_step
-
-    if toggles["stamped"] and hasattr(env, "_last_stamp_bbox"):
-        bb = env._last_stamp_bbox
-        if bb is not None:
-            min_x, max_x, min_y, max_y = bb
-            corners_bb = [
-                to_screen(
-                    min_x * METERS_PER_PIXEL + env.render_offset[0],
-                    max_y * METERS_PER_PIXEL + env.render_offset[1],
-                ),
-                to_screen(
-                    max_x * METERS_PER_PIXEL + env.render_offset[0],
-                    max_y * METERS_PER_PIXEL + env.render_offset[1],
-                ),
-                to_screen(
-                    max_x * METERS_PER_PIXEL + env.render_offset[0],
-                    min_y * METERS_PER_PIXEL + env.render_offset[1],
-                ),
-                to_screen(
-                    min_x * METERS_PER_PIXEL + env.render_offset[0],
-                    min_y * METERS_PER_PIXEL + env.render_offset[1],
-                ),
-            ]
-            pygame.draw.lines(canvas, (255, 200, 0), True, corners_bb, 2)
-
-    surface.blit(canvas, (x0, y0))
+# Environment field rendering is now performed directly by env.render()
 
 
 def draw_obs_maps(surface, obs, panel_x, y, font):
@@ -270,6 +127,7 @@ def main():
     font_lg = pygame.font.SysFont("monospace", 16, bold=True)
 
     env = RobotCoverageEnv(render_mode="rgb_array", phase=1)
+    env.window_size = ENV_SIZE
     obs, info = env.reset()
 
     auto_sample = False
@@ -357,7 +215,9 @@ def main():
         fps_smooth = FPS_SMOOTHING * fps_smooth + (1 - FPS_SMOOTHING) * instant_fps
 
         screen.fill((20, 20, 20))
-        draw_env_view(screen, env, 0, 0, toggles)
+        field_img = env.render(toggles=toggles)
+        field_surf = pygame.surfarray.make_surface(np.transpose(field_img, (1, 0, 2)))
+        screen.blit(field_surf, (0, 0))
 
         panel_x = ENV_SIZE
         pygame.draw.rect(screen, (35, 35, 40), (panel_x, 0, PANEL_W, WINDOW_H))

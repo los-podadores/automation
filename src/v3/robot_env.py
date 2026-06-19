@@ -10,6 +10,14 @@ from utils import total_variation
 
 ROBOT_SIDE = 1.0
 ROBOT_RADIUS = ROBOT_SIDE / 2.0
+RAY_COLORS = [
+    (255, 165, 0),
+    (0, 255, 200),
+    (255, 165, 0),
+    (100, 100, 255),
+    (100, 100, 255),
+    (200, 200, 200),
+]
 MAX_STEPS = 15000
 REWARD_BASE_PENALTY = -0.05
 REWARD_COLLISION = -5.0
@@ -334,7 +342,7 @@ class RobotCoverageEnv(gym.Env):
             self.spawn_safety_map = obs_for_dilation
 
     def _compute_coverable_area(self):
-        valid_positions = ((self.field_grid > 0) & (self.virtual_wall_map == 0)).astype(
+        valid_positions = ((self.field_grid > 0) & (self.collision_map == 0)).astype(
             np.uint8
         )
 
@@ -456,7 +464,7 @@ class RobotCoverageEnv(gym.Env):
 
         local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
         local_overlap = self.overlap_map[min_y:max_y, min_x:max_x]
-        local_obs = self.virtual_wall_map[min_y:max_y, min_x:max_x]
+        local_obs = self.collision_map[min_y:max_y, min_x:max_x]
 
         local_h = max_y - min_y
         local_w = max_x - min_x
@@ -497,7 +505,7 @@ class RobotCoverageEnv(gym.Env):
 
         local_cov = self.coverage_map[min_y:max_y, min_x:max_x]
         local_overlap = self.overlap_map[min_y:max_y, min_x:max_x]
-        local_obs = self.virtual_wall_map[min_y:max_y, min_x:max_x]
+        local_obs = self.collision_map[min_y:max_y, min_x:max_x]
         local_h = max_y - min_y
         local_w = max_x - min_x
         local_mask = np.zeros((local_h, local_w), dtype=np.uint8)
@@ -524,16 +532,16 @@ class RobotCoverageEnv(gym.Env):
             obs = cv2.dilate(obs, k, iterations=1)
         cov[obs > 0] = 0
         free = (cov + obs) == 0
-        
+
         k3 = np.ones((3, 3), dtype=np.float32)
         cov_dilated = cv2.dilate(cov, k3, iterations=1)
-        
+
         # Base frontier
         frontier = (np.logical_and(cov_dilated, free)).astype(np.float32)
-        
+
         # --- NEW: Exaggerate the frontier so it survives 32x32 downsampling ---
         frontier_exaggerated = cv2.dilate(frontier, k3, iterations=1)
-        
+
         return frontier_exaggerated
 
     def _get_transform_matrix(self, scale):
@@ -840,7 +848,7 @@ class RobotCoverageEnv(gym.Env):
                 self.coverage_map, old_pos, radius_m
             )
             local_obs_new_aligned = self._get_local_crop(
-                self.virtual_wall_map, old_pos, radius_m
+                self.collision_map, old_pos, radius_m
             )
 
             if local_cov_old is not None and local_obs_old is not None:
@@ -860,7 +868,7 @@ class RobotCoverageEnv(gym.Env):
                 self.coverage_map, self.agent_pos_m, radius_m
             )
             self.local_known_obstacles_old = self._get_local_crop(
-                self.virtual_wall_map, self.agent_pos_m, radius_m
+                self.collision_map, self.agent_pos_m, radius_m
             )
 
         if new_cells > 0:
@@ -871,7 +879,7 @@ class RobotCoverageEnv(gym.Env):
 
         terminated = False
         goal = PHASES[self.phase]["goal"]
-        
+
         # --- NEW: Terminal Reward Logic ---
         if self.coverage_in_percent >= goal:
             terminated = True
@@ -908,9 +916,17 @@ class RobotCoverageEnv(gym.Env):
         if pygame.get_init():
             pygame.quit()
 
-    def render(self):
+    def render(self, toggles=None):
         if self.render_mode is None:
             return
+
+        if toggles is None:
+            toggles = getattr(self, "render_toggles", {
+                "dilated": False,
+                "stamped": False,
+                "rays": False,
+                "coverable": False,
+            })
 
         if self.window is None:
             if not pygame.get_init():
@@ -948,10 +964,22 @@ class RobotCoverageEnv(gym.Env):
             return px, py
 
         img = np.full((self.grid_size_p, self.grid_size_p, 3), 30, dtype=np.uint8)
-        img[self.field_grid > 0] = [220, 220, 220]
-        img[self.virtual_wall_map > 0] = [150, 150, 150]
-        img[self.coverage_map > 0] = [80, 160, 80]
-        img[self.obstacle_map > 0] = [200, 80, 80]
+        field_mask = self.field_grid > 0
+        img[field_mask] = [220, 220, 220]
+        cov_mask = self.coverage_map > 0
+        img[cov_mask] = [80, 160, 80]
+
+        if toggles.get("dilated", False):
+            dilated_mask = self.virtual_wall_map > 0
+            img[dilated_mask] = [50, 140, 200]
+
+        if toggles.get("coverable", False):
+            if hasattr(self, "coverable_area") and self.coverable_area is not None:
+                coverable_mask = self.coverable_area > 0
+                img[coverable_mask] = [0, 180, 180]
+
+        obs_mask = self.obstacle_map > 0
+        img[obs_mask] = (0.5 * img[obs_mask] + 0.5 * np.array([200, 80, 80])).astype(np.uint8)
 
         img = cv2.resize(img, (ws, ws), interpolation=cv2.INTER_NEAREST)
         img = cv2.cvtColor(img[::-1], cv2.COLOR_BGR2RGB)
@@ -975,6 +1003,88 @@ class RobotCoverageEnv(gym.Env):
         pygame.draw.line(
             canvas, (0, 255, 0), to_screen(*self.agent_pos_m), to_screen(hx, hy), 2
         )
+
+        a = ROBOT_SIDE
+        theta = self.agent_heading
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+
+        def local_pt(lx, ly):
+            return (
+                self.agent_pos_m[0] + lx * cos_t - ly * sin_t,
+                self.agent_pos_m[1] + lx * sin_t + ly * cos_t,
+            )
+
+        origins = [
+            local_pt(a / 2, a / 2),
+            local_pt(a / 2, 0),
+            local_pt(a / 2, -a / 2),
+            local_pt(0, a / 2),
+            local_pt(0, -a / 2),
+            local_pt(-a / 2, 0),
+        ]
+        ray_angles = [math.pi / 4, 0.0, -math.pi / 4, math.pi / 2, -math.pi / 2, math.pi]
+        sensors, _ = self._compute_sensors()
+
+        for i, (origin, ang_off) in enumerate(zip(origins, ray_angles)):
+            ang = theta + ang_off
+            dist = sensors[i] * RAY_MAX_DIST
+            end = (
+                origin[0] + math.cos(ang) * dist,
+                origin[1] + math.sin(ang) * dist,
+            )
+            pygame.draw.line(canvas, RAY_COLORS[i], to_screen(*origin), to_screen(*end), 2)
+            pygame.draw.circle(canvas, (255, 255, 255), to_screen(*end), 3)
+            pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(*origin), 3)
+
+            if toggles.get("rays", False):
+                ox_p, oy_p = self._m_to_grid_px(np.array(origin))
+                ex_p, ey_p = self._m_to_grid_px(np.array(end))
+                adx = abs(ex_p - ox_p)
+                ady = abs(ey_p - oy_p)
+                if adx > 0 or ady > 0:
+                    sx_step = 1 if ex_p > ox_p else -1
+                    sy_step = 1 if ey_p > oy_p else -1
+                    err = adx - ady
+                    cx, cy = ox_p, oy_p
+                    max_it = adx + ady + 1
+                    for _ in range(max_it):
+                        if 0 <= cx < self.grid_size_p and 0 <= cy < self.grid_size_p:
+                            wx = cx * METERS_PER_PIXEL + self.render_offset[0]
+                            wy = cy * METERS_PER_PIXEL + self.render_offset[1]
+                            pygame.draw.circle(canvas, RAY_COLORS[i], to_screen(wx, wy), 1)
+                        if cx == ex_p and cy == ey_p:
+                            break
+                        e2 = 2 * err
+                        if e2 > -ady:
+                            err -= ady
+                            cx += sx_step
+                        if e2 < adx:
+                            err += adx
+                            cy += sy_step
+
+        if toggles.get("stamped", False) and getattr(self, "_last_stamp_bbox", None) is not None:
+            bb = self._last_stamp_bbox
+            min_x, max_x, min_y, max_y = bb
+            corners_bb = [
+                to_screen(
+                    min_x * METERS_PER_PIXEL + self.render_offset[0],
+                    max_y * METERS_PER_PIXEL + self.render_offset[1],
+                ),
+                to_screen(
+                    max_x * METERS_PER_PIXEL + self.render_offset[0],
+                    max_y * METERS_PER_PIXEL + self.render_offset[1],
+                ),
+                to_screen(
+                    max_x * METERS_PER_PIXEL + self.render_offset[0],
+                    min_y * METERS_PER_PIXEL + self.render_offset[1],
+                ),
+                to_screen(
+                    min_x * METERS_PER_PIXEL + self.render_offset[0],
+                    min_y * METERS_PER_PIXEL + self.render_offset[1],
+                ),
+            ]
+            pygame.draw.lines(canvas, (255, 200, 0), True, corners_bb, 2)
 
         self.window.blit(canvas, (0, 0))
 
