@@ -32,7 +32,7 @@ METERS_PER_PIXEL = 0.1
 NUM_MAPS = 4
 MAP_SIZE = 32
 SCALES = [1, 6, 11, 16]
-SENSOR_DIM = 8
+SENSOR_DIM = 11
 NUM_RAYS = 6
 RAY_MAX_DIST = 1
 POSITION_NOISE = 0.01
@@ -125,11 +125,11 @@ class RobotCoverageEnv(gym.Env):
                 ),
                 "sensors": spaces.Box(
                     low=np.array(
-                        [0.0] * 6 + [-1.0, -1.0],
+                        [0.0] * 6 + [-1.0, -1.0] + [0.0, -1.0, -1.0],
                         dtype=np.float32,
                     ),
                     high=np.array(
-                        [1.0] * 6 + [1.0, 1.0],
+                        [1.0] * 6 + [1.0, 1.0] + [1.0, 1.0, 1.0],
                         dtype=np.float32,
                     ),
                     dtype=np.float32,
@@ -680,8 +680,30 @@ class RobotCoverageEnv(gym.Env):
             hit_points.append(hit)
 
         normalized_dists = [d / RAY_MAX_DIST for d in dists]
+        
+        # --- NEW: Homing Beacon to Closest Frontier ---
+        frontier_y, frontier_x = np.where(self.frontier_map > 0)
+        if len(frontier_x) == 0:
+            homing_dist, homing_cos, homing_sin = 0.0, 0.0, 0.0
+        else:
+            agent_px, agent_py = self._m_to_grid_px(self.agent_pos_m)
+            distances = np.sqrt((frontier_x - agent_px) ** 2 + (frontier_y - agent_py) ** 2)
+            min_idx = np.argmin(distances)
+            
+            # Calculate relative angle
+            dy = frontier_y[min_idx] - agent_py
+            dx = frontier_x[min_idx] - agent_px
+            target_angle = math.atan2(dy, dx)
+            rel_angle = target_angle - self.agent_heading
+            
+            # Normalize distance based on the map size
+            max_map_dist = MAP_SIZE * self.pixels_per_meter
+            homing_dist = min(distances[min_idx] / max_map_dist, 1.0)
+            homing_cos = math.cos(rel_angle)
+            homing_sin = math.sin(rel_angle)
+
         sensors = np.array(
-            normalized_dists + [self.last_v, self.last_w],
+            normalized_dists + [self.last_v, self.last_w, homing_dist, homing_cos, homing_sin],
             dtype=np.float32,
         )
         return sensors, hit_points
@@ -788,8 +810,12 @@ class RobotCoverageEnv(gym.Env):
 
     def step(self, action):
         self.current_step += 1
-        throttle = float((action[0] + 1) / 2)
-        steering = float(np.clip(action[1], -1, 1))
+        raw_throttle = float(action[0]) # Stays between -1.0 and 1.0
+        
+        # Give it half-speed in reverse so forward is still preferred
+        throttle = raw_throttle if raw_throttle >= 0 else raw_throttle * 0.5 
+        
+        steering = float(np.clip(action[1], -1.0, 1.0))
 
         lin_vel = throttle * ROBOT_SPEED_V
         lin_vel *= 1 - abs(steering) * 0.5

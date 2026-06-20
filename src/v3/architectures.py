@@ -20,7 +20,7 @@ class StackedMapFeaturesExtractor(BaseFeaturesExtractor):
         features_dim: int,
         map_size: int,
         num_maps: int,
-        sensor_dim: int = 8,
+        sensor_dim: int = 11,
         num_map_types: int = 3,
     ):
         super().__init__(observation_space, features_dim=features_dim)
