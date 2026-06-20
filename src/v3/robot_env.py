@@ -18,14 +18,14 @@ RAY_COLORS = [
     (100, 100, 255),
     (200, 200, 200),
 ]
-MAX_STEPS = 15000
-REWARD_BASE_PENALTY = -0.05
+REWARD_BASE_PENALTY = -0.04
 REWARD_COLLISION = -5.0
 REWARD_TV_SCALE = 2.0
 REWARD_TV_MAX = 3.0
 REWARD_AREA_SCALE = 1.5
 REWARD_AREA_MAX = 2.0
-ROBOT_SPEED_V = 0.26
+WIN_REWARD = 20.0
+ROBOT_SPEED_V = 0.15
 ROBOT_SPEED_W = 1.0
 DT = 0.5
 METERS_PER_PIXEL = 0.1
@@ -556,28 +556,55 @@ class RobotCoverageEnv(gym.Env):
 
         return t2 @ rot @ t1
 
-    def _get_relative_map(self, world_map, pad_value, scale=1):
+    def _get_relative_map(self, world_map, pad_value, scale=1, is_frontier=False):
         sc = min(scale, self.grid_size_p)
         matrix = self._get_transform_matrix(sc)
+
+        if is_frontier:
+            # OpenCV cv2.INTER_MAX is not a valid interpolation method for cv2.resize.
+            # We use dilation (max-pooling logic) so that bright spots/frontiers survive the downsampling.
+            kernel_size = int(math.ceil(sc))
+            if kernel_size > 1:
+                kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+                world_map = cv2.dilate(world_map, kernel)
+            interp_method = cv2.INTER_NEAREST
+        else:
+            interp_method = cv2.INTER_AREA
+
         downsampled = cv2.resize(
             world_map,
             (int(0.5 + self.grid_size_p / sc),) * 2,
-            interpolation=cv2.INTER_AREA,
+            interpolation=interp_method,
         )
         warped = cv2.warpAffine(
             downsampled,
             M=matrix[:2],
             dsize=(MAP_SIZE,) * 2,
             borderValue=pad_value,
-            flags=cv2.INTER_AREA,
+            flags=cv2.INTER_NEAREST if is_frontier else cv2.INTER_AREA,
         )
         return warped
 
-    def _get_multi_scale_map(self, world_map, pad_value):
+    def _get_multi_scale_map(self, world_map, pad_value, is_frontier=False):
         ms = np.zeros((NUM_MAPS, MAP_SIZE, MAP_SIZE), dtype=np.float32)
         for i, s in enumerate(SCALES):
-            ms[i] = self._get_relative_map(world_map, pad_value, s)
+            ms[i] = self._get_relative_map(
+                world_map, pad_value, s, is_frontier=is_frontier
+            )
         return ms
+
+    def _get_distance_to_closest_frontier(self):
+        # Get coordinates of all frontier pixels
+        frontier_y, frontier_x = np.where(self.frontier_map > 0)
+
+        if len(frontier_x) == 0:
+            return 0.0  # No frontiers left
+
+        agent_px, agent_py = self._m_to_grid_px(self.agent_pos_m)
+
+        # Calculate Euclidean distance to all frontier pixels
+        distances = np.sqrt((frontier_x - agent_px) ** 2 + (frontier_y - agent_py) ** 2)
+        return np.min(distances) * METERS_PER_PIXEL
 
     def _local_to_global(self, lx, ly):
         x, y = self.agent_pos_m
@@ -690,7 +717,9 @@ class RobotCoverageEnv(gym.Env):
         obs = {
             "coverage": self._get_multi_scale_map(cov, 0),
             "obstacles": self._get_multi_scale_map(self.obstacle_map, 0),
-            "frontier": self._get_multi_scale_map(self.frontier_map, 0),
+            "frontier": self._get_multi_scale_map(
+                self.frontier_map, 0, is_frontier=True
+            ),
             "sensors": self._last_sensors,
         }
         for key in ("coverage", "obstacles", "frontier"):
@@ -744,6 +773,8 @@ class RobotCoverageEnv(gym.Env):
         sensors, hit_points = self._compute_sensors()
         self._last_sensors = sensors
         self._update_obstacle_map_from_sensors(hit_points)
+
+        self.old_frontier_distance = self._get_distance_to_closest_frontier()
 
         obs = self._get_obs()
         info = {
@@ -817,6 +848,12 @@ class RobotCoverageEnv(gym.Env):
 
         self.frontier_map = self._compute_frontier_map()
 
+        new_frontier_distance = self._get_distance_to_closest_frontier()
+        reward_frontier = 0.0
+        if new_cells == 0 and not collided:
+            reward_frontier = (self.old_frontier_distance - new_frontier_distance) * 0.5
+        self.old_frontier_distance = new_frontier_distance
+
         cov = self.coverage_map.copy()
         cov[self.coverable_area == 0] = 0
         self.coverage_in_pixels = int(cov.sum())
@@ -872,14 +909,14 @@ class RobotCoverageEnv(gym.Env):
             reward_const = REWARD_BASE_PENALTY
         else:
             reward_const = 2 * REWARD_BASE_PENALTY
-        reward = reward_area + reward_tv + reward_coll + reward_const
+        reward = reward_area + reward_tv + reward_coll + reward_const + reward_frontier
+
+        # --- 1. Episode Termination Logic ---
+        cells_missed = self.total_cells - self.coverage_in_pixels
 
         terminated = False
-
-        cells_missed = self.total_cells - self.coverage_in_pixels
-        if cells_missed < CELLS_MISSED_THRESHOLD:
-            terminated = True
-            reward += 15.0  # Massive jackpot for finishing the room!
+        if cells_missed == 0:
+            terminated = True  # Only terminate early for absolute perfection
 
         truncated = False
         max_steps = PHASES[self.phase]["max_steps"]
@@ -887,6 +924,15 @@ class RobotCoverageEnv(gym.Env):
             truncated = True
         if self.non_new_steps >= MAX_NON_NEW_STEPS:
             truncated = True
+
+        # --- 2. End-of-Episode Coverage Reward ---
+        # Only evaluate the big win reward on the very last step of the episode
+        if terminated or truncated:
+            # Curriculum "Win": Did it miss fewer than 20 cells?
+            if cells_missed < CELLS_MISSED_THRESHOLD:
+                # Scale from 0.5x reward (at 19 missed) to 1.0x reward (at 0 missed)
+                perfection_multiplier = 1.0 - (cells_missed / CELLS_MISSED_THRESHOLD)
+                reward += WIN_REWARD * (0.5 + 0.5 * perfection_multiplier)
 
         obs = self._get_obs()
         info = {
