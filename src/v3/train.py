@@ -33,7 +33,7 @@ N_STEPS = 2048
 SAVE_FREQ = 200_000 // NUM_ENVS
 EVAL_FREQ = 200_000 // NUM_ENVS
 N_EPOCHS = 4
-GAMMA = 0.99
+GAMMA = 0.98
 GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
 ENT_COEF = 0.01
@@ -59,6 +59,10 @@ class CurriculumCallback(BaseCallback):
 
         if missed_cells:
             self.logger.record("field/cells_missed_mean", np.mean(missed_cells))
+            self.logger.record(
+                "curriculum/success_rate",
+                sum(self.success_window) / len(self.success_window),
+            )
 
         if len(self.success_window) >= SUCCESS_WINDOW:
             rate = sum(self.success_window) / len(self.success_window)
@@ -70,11 +74,6 @@ class CurriculumCallback(BaseCallback):
                     print(f"Curriculum: advancing to phase {self.current_phase}")
 
         self.logger.record("curriculum/phase", self.current_phase)
-        if len(self.success_window) >= SUCCESS_WINDOW:
-            self.logger.record(
-                "curriculum/success_rate",
-                sum(self.success_window) / len(self.success_window),
-            )
 
         return True
 
