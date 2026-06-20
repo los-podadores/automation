@@ -1,24 +1,32 @@
+"""Visualise a trained PPO agent by running episodes in human render mode."""
+
+from __future__ import annotations
+
 import argparse
 
-import numpy as np
 from stable_baselines3 import PPO
 
 from robot_env import RobotCoverageEnv
+from utils import seed_everything
 
 
-def main():
+def main() -> None:
+    """Load a model and render its behaviour."""
     parser = argparse.ArgumentParser(description="Visualize trained PPO agent")
-    parser.add_argument("--model", type=str, required=True, help="Path to trained model")
+    parser.add_argument(
+        "--model", type=str, required=True, help="Path to trained model"
+    )
     parser.add_argument("--phase", type=int, default=1, help="Phase to evaluate (1-8)")
     parser.add_argument("--episodes", type=int, default=5, help="Number of episodes")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Random seed for reproducibility"
+    )
     args = parser.parse_args()
 
     if args.seed is not None:
-        np.random.seed(args.seed)
+        seed_everything(args.seed)
 
     model = PPO.load(args.model)
-
     env = RobotCoverageEnv(render_mode="human", phase=args.phase)
 
     for ep in range(args.episodes):
@@ -33,7 +41,6 @@ def main():
             done = terminated or truncated
             total_reward += reward
             steps += 1
-
             env.render()
 
         print(
