@@ -20,9 +20,9 @@ RAY_COLORS = [
 ]
 REWARD_BASE_PENALTY = -0.04
 REWARD_COLLISION = -5.0
-REWARD_TV_SCALE = 2.0
+REWARD_TV_SCALE = 1.5
 REWARD_TV_MAX = 3.0
-REWARD_AREA_SCALE = 1.5
+REWARD_AREA_SCALE = 2
 REWARD_AREA_MAX = 2.0
 WIN_REWARD = 20.0
 ROBOT_SPEED_V = 0.15
@@ -680,22 +680,24 @@ class RobotCoverageEnv(gym.Env):
             hit_points.append(hit)
 
         normalized_dists = [d / RAY_MAX_DIST for d in dists]
-        
+
         # --- NEW: Homing Beacon to Closest Frontier ---
         frontier_y, frontier_x = np.where(self.frontier_map > 0)
         if len(frontier_x) == 0:
             homing_dist, homing_cos, homing_sin = 0.0, 0.0, 0.0
         else:
             agent_px, agent_py = self._m_to_grid_px(self.agent_pos_m)
-            distances = np.sqrt((frontier_x - agent_px) ** 2 + (frontier_y - agent_py) ** 2)
+            distances = np.sqrt(
+                (frontier_x - agent_px) ** 2 + (frontier_y - agent_py) ** 2
+            )
             min_idx = np.argmin(distances)
-            
+
             # Calculate relative angle
             dy = frontier_y[min_idx] - agent_py
             dx = frontier_x[min_idx] - agent_px
             target_angle = math.atan2(dy, dx)
             rel_angle = target_angle - self.agent_heading
-            
+
             # Normalize distance based on the map size
             max_map_dist = MAP_SIZE * self.pixels_per_meter
             homing_dist = min(distances[min_idx] / max_map_dist, 1.0)
@@ -703,7 +705,8 @@ class RobotCoverageEnv(gym.Env):
             homing_sin = math.sin(rel_angle)
 
         sensors = np.array(
-            normalized_dists + [self.last_v, self.last_w, homing_dist, homing_cos, homing_sin],
+            normalized_dists
+            + [self.last_v, self.last_w, homing_dist, homing_cos, homing_sin],
             dtype=np.float32,
         )
         return sensors, hit_points
@@ -810,11 +813,11 @@ class RobotCoverageEnv(gym.Env):
 
     def step(self, action):
         self.current_step += 1
-        raw_throttle = float(action[0]) # Stays between -1.0 and 1.0
-        
+        raw_throttle = float(action[0])  # Stays between -1.0 and 1.0
+
         # Give it half-speed in reverse so forward is still preferred
-        throttle = raw_throttle if raw_throttle >= 0 else raw_throttle * 0.5 
-        
+        throttle = raw_throttle if raw_throttle >= 0 else raw_throttle * 0.5
+
         steering = float(np.clip(action[1], -1.0, 1.0))
 
         lin_vel = throttle * ROBOT_SPEED_V
@@ -876,8 +879,15 @@ class RobotCoverageEnv(gym.Env):
 
         new_frontier_distance = self._get_distance_to_closest_frontier()
         reward_frontier = 0.0
+
         if new_cells == 0 and not collided:
-            reward_frontier = (self.old_frontier_distance - new_frontier_distance) * 0.5
+            dist_change = self.old_frontier_distance - new_frontier_distance
+            max_dist_change = ROBOT_SPEED_V * DT
+
+            progress_ratio = float(np.clip(dist_change / max_dist_change, -1.0, 1.0))
+            target_penalty = abs(2 * REWARD_BASE_PENALTY)
+            reward_frontier = progress_ratio * target_penalty
+
         self.old_frontier_distance = new_frontier_distance
 
         cov = self.coverage_map.copy()
