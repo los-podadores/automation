@@ -17,17 +17,15 @@ RAY_COLORS: list[tuple[int, int, int]] = [
 ]
 NUM_RAYS: int = 6
 RAY_MAX_DIST: float = 1.0
-SENSOR_DIM: int = 11
+SENSOR_DIM: int = 8
 
 # --- Reward weights ---
 REWARD_BASE_PENALTY: float = -0.04
 REWARD_COLLISION: float = -5.0
-REWARD_TV_SCALE: float = 1.0
+REWARD_TV_SCALE: float = 2.0
 REWARD_TV_MAX: float = 3.0
-REWARD_AREA_SCALE: float = 2.5
+REWARD_AREA_SCALE: float = 1.5
 REWARD_AREA_MAX: float = 2.0
-WIN_REWARD: float = 25.0
-
 # --- Dynamics ---
 ROBOT_SPEED_V: float = 0.15
 ROBOT_SPEED_W: float = 1.0
@@ -37,7 +35,7 @@ DT: float = 0.5
 METERS_PER_PIXEL: float = 0.1
 NUM_MAPS: int = 4
 MAP_SIZE: int = 32
-SCALES: list[int] = [1, 6, 11, 16]
+SCALES: list[int] = [1, 3, 7, 20]
 
 # --- Noise ---
 POSITION_NOISE: float = 0.01

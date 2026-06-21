@@ -26,7 +26,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
 LEARNING_RATE: float = 3e-4
 TOTAL_TIMESTEPS: int = 16_000_000
@@ -86,10 +86,10 @@ class CurriculumCallback(BaseCallback):
 
 def load_model(
     model_path: str,
-    env: SubprocVecEnv,
+    env: VecNormalize,
     log_dir: str,
 ) -> tuple[PPO, int]:
-    """Load a saved PPO model and its curriculum phase."""
+    """Load a saved PPO model, its curriculum phase, and VecNormalize stats."""
     print(f"Loading model from {model_path}")
     model = PPO.load(model_path, env=env, tensorboard_log=log_dir)
 
@@ -100,15 +100,22 @@ def load_model(
             initial_phase = pickle.load(f)  # noqa: S301
         print(f"Resuming curriculum from phase {initial_phase}")
 
+    vecnorm_path = model_path.replace(".zip", "_vecnorm.pkl")
+    if os.path.exists(vecnorm_path):
+        env.load(vecnorm_path)
+        print("Loaded VecNormalize stats")
+
     return model, initial_phase
 
 
 def save_model(model: PPO, path: str, phase: int) -> None:
-    """Save a PPO model and its current curriculum phase."""
+    """Save a PPO model, its current curriculum phase, and VecNormalize stats."""
     model.save(path)
     phase_path = path.replace(".zip", "_phase.pkl")
     with open(phase_path, "wb") as f:
         pickle.dump(phase, f)
+    if isinstance(model.venv, VecNormalize):
+        model.venv.save(path.replace(".zip", "_vecnorm.pkl"))
 
 
 def make_env(phase: int = 1, render_mode: str | None = None) -> callable[[], Monitor]:
@@ -152,14 +159,14 @@ def main() -> None:
     )
 
     initial_phase = 1
+    print("Initializing training environments...")
+    env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
+    env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+    check_env(RobotCoverageEnv(phase=1), warn=True)
+
     if args.resume:
-        env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
-        check_env(RobotCoverageEnv(phase=1), warn=True)
         model, initial_phase = load_model(args.resume, env, log_dir)
     else:
-        print("Initializing training environments...")
-        env = SubprocVecEnv([make_env(phase=1) for _ in range(NUM_ENVS)])
-        check_env(RobotCoverageEnv(phase=1), warn=True)
         model = PPO(
             policy="MultiInputPolicy",
             env=env,
@@ -187,6 +194,7 @@ def main() -> None:
     )
 
     eval_env = DummyVecEnv([make_env(phase=1, render_mode="rgb_array")])
+    eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=False)
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=model_dir,

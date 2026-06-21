@@ -37,7 +37,6 @@ from .config import (
     SUCCESS_THRESHOLD,
     SUCCESS_WINDOW,
     VIRTUAL_MARGIN_PX,
-    WIN_REWARD,
 )
 
 __all__ = [
@@ -72,5 +71,4 @@ __all__ = [
     "SUCCESS_THRESHOLD",
     "SUCCESS_WINDOW",
     "VIRTUAL_MARGIN_PX",
-    "WIN_REWARD",
 ]

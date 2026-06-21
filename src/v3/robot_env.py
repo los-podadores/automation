@@ -15,9 +15,9 @@ import cv2
 import gymnasium as gym
 import numpy as np
 import pygame
-from gymnasium import spaces
-
 from env import collision as _col
+from env import maps as _maps
+from env import sensors as _sensors
 from env.config import (
     CELLS_MISSED_THRESHOLD,
     DT,
@@ -41,14 +41,12 @@ from env.config import (
     ROBOT_SPEED_V,
     ROBOT_SPEED_W,
     SENSOR_DIM,  # noqa: F401 — re-exported for external consumers
-    WIN_REWARD,
 )
 from env.field_generator import generate_random_field, get_safe_spawn
-from env import maps as _maps
 from env.renderer import draw_robot_footprint_local, render_frame
-from env import sensors as _sensors
 from env.transforms import get_multi_scale_map, m_to_grid_px
 from env.utils import total_variation
+from gymnasium import spaces
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +75,8 @@ class RobotCoverageEnv(gym.Env):
                     low=0, high=1, shape=obs_shape, dtype=np.float32
                 ),
                 "sensors": spaces.Box(
-                    low=np.array(
-                        [0.0] * 6 + [-1.0, -1.0] + [0.0, -1.0, -1.0], dtype=np.float32
-                    ),
-                    high=np.array(
-                        [1.0] * 6 + [1.0, 1.0] + [1.0, 1.0, 1.0], dtype=np.float32
-                    ),
+                    low=np.array([0.0] * 6 + [-1.0, -1.0], dtype=np.float32),
+                    high=np.array([1.0] * 6 + [1.0, 1.0], dtype=np.float32),
                     dtype=np.float32,
                 ),
             }
@@ -489,10 +483,6 @@ class RobotCoverageEnv(gym.Env):
             truncated = True
         if self.non_new_steps >= MAX_NON_NEW_STEPS:
             truncated = True
-
-        if (terminated or truncated) and cells_missed < CELLS_MISSED_THRESHOLD:
-            perfection_multiplier = 1.0 - (cells_missed / CELLS_MISSED_THRESHOLD)
-            reward += WIN_REWARD * (0.5 + 0.5 * perfection_multiplier)
 
         obs = self._get_obs()
         info = {

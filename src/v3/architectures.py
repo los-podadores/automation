@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import gymnasium as gym
 import torch as th
-from torch import nn
-
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from torch import nn
 
 
 class StackedMapFeaturesExtractor(BaseFeaturesExtractor):
@@ -21,7 +20,7 @@ class StackedMapFeaturesExtractor(BaseFeaturesExtractor):
         features_dim: int,
         map_size: int,
         num_maps: int,
-        sensor_dim: int = 11,
+        sensor_dim: int = 8,
         num_map_types: int = 3,
     ) -> None:
         super().__init__(observation_space, features_dim=features_dim)
