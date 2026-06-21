@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 
 from .config import (
-    OBSTACLE_DILATION,
     ROBOT_RADIUS_PX,
     SPAWN_SAFETY_RADIUS_PX,
     VIRTUAL_MARGIN_PX,
@@ -129,7 +128,7 @@ def init_maps(
         pixels_per_meter,
         grid_size_p,
     )
-    frontier_map = compute_frontier_map(coverage_map, obstacle_map)
+    frontier_map = compute_frontier_map(coverage_map, collision_map)
     return coverage_map, overlap_map, obstacle_map, frontier_map
 
 
@@ -221,18 +220,19 @@ def stamp_coverage(
 
 
 def compute_frontier_map(
-    coverage_map: np.ndarray, obstacle_map: np.ndarray
+    coverage_map: np.ndarray, collision_map: np.ndarray
 ) -> np.ndarray:
-    """Return an exaggerated frontier mask (boundary between covered and free)."""
+    """Return an exaggerated frontier mask (boundary between covered and free).
+
+    Uses *collision_map* (dilated by robot radius) so the frontier boundary
+    aligns with the same navigable-space mask used during coverage stamping.
+    """
     cov = coverage_map.copy()
-    obs = obstacle_map.copy()
-    if OBSTACLE_DILATION > 1:
-        k = np.ones((OBSTACLE_DILATION,) * 2, dtype=np.float32)
-        obs[0, :] = 1
-        obs[-1, :] = 1
-        obs[:, 0] = 1
-        obs[:, -1] = 1
-        obs = cv2.dilate(obs, k, iterations=1)
+    obs = collision_map.copy()
+    obs[0, :] = 1
+    obs[-1, :] = 1
+    obs[:, 0] = 1
+    obs[:, -1] = 1
     cov[obs > 0] = 0
     free = (cov + obs) == 0
 
