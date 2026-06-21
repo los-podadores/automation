@@ -28,7 +28,7 @@ from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
-LEARNING_RATE: float = 3e-4
+LEARNING_RATE: float = 1e-4
 TOTAL_TIMESTEPS: int = 16_000_000
 CNN_DIMS: int = 256
 SUCCESS_WINDOW: int = 50
@@ -41,7 +41,7 @@ N_EPOCHS: int = 4
 GAMMA: float = 0.98
 GAE_LAMBDA: float = 0.95
 CLIP_RANGE: float = 0.2
-ENT_COEF: float = 0.01
+ENT_COEF: float = 0.03
 VF_COEF: float = 0.5
 MAX_GRAD_NORM: float = 0.5
 BATCH_SIZE: int = 512
@@ -82,6 +82,73 @@ class CurriculumCallback(BaseCallback):
 
         self.logger.record("curriculum/phase", self.current_phase)
         return True
+
+
+class CustomEvalCallback(EvalCallback):
+    """Custom EvalCallback that also logs cells_missed, success_rate, and phase."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.eval_cells_missed: list[float] = []
+        self.eval_phases: list[float] = []
+        self.eval_cells_missed_results: list[float] = []
+        self.eval_phases_results: list[float] = []
+        self.eval_success_rate_results: list[float] = []
+
+    def _log_success_callback(
+        self, locals_: dict[str, Any], globals_: dict[str, Any]
+    ) -> None:
+        super()._log_success_callback(locals_, globals_)
+
+        info = locals_["info"]
+        if locals_["done"]:
+            cells_missed = info.get("cells_missed")
+            if cells_missed is not None:
+                self.eval_cells_missed.append(float(cells_missed))
+                # Explicitly populate the success buffer for the parent class
+                self._is_success_buffer.append(cells_missed < CELLS_MISSED_THRESHOLD)
+
+            phase = info.get("phase")
+            if phase is not None:
+                self.eval_phases.append(float(phase))
+
+    def _on_step(self) -> bool:
+        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            self.eval_cells_missed = []
+            self.eval_phases = []
+            self._is_success_buffer = []
+
+            original_dump = self.logger.dump
+
+            def custom_dump(step: int | None = None) -> None:
+                if self.eval_cells_missed:
+                    mean_cells_missed = float(np.mean(self.eval_cells_missed))
+                    self.logger.record("eval/cells_missed", mean_cells_missed)
+                    self.eval_cells_missed_results.append(mean_cells_missed)
+                    if self.verbose >= 1:
+                        print(f"Eval cells missed: {mean_cells_missed:.2f}")
+
+                if self.eval_phases:
+                    mean_phase = float(np.mean(self.eval_phases))
+                    self.logger.record("eval/phase", mean_phase)
+                    self.eval_phases_results.append(mean_phase)
+                    if self.verbose >= 1:
+                        print(f"Eval phase: {mean_phase:.2f}")
+
+                if self._is_success_buffer:
+                    success_rate = float(np.mean(self._is_success_buffer))
+                    self.eval_success_rate_results.append(success_rate)
+
+                original_dump(step)
+
+            self.logger.dump = custom_dump
+            try:
+                result = super()._on_step()
+            finally:
+                self.logger.dump = original_dump
+            return result
+        else:
+            return super()._on_step()
 
 
 def load_model(
@@ -195,7 +262,7 @@ def main() -> None:
 
     eval_env = DummyVecEnv([make_env(phase=1, render_mode="rgb_array")])
     eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=False)
-    eval_callback = EvalCallback(
+    eval_callback = CustomEvalCallback(
         eval_env,
         best_model_save_path=model_dir,
         log_path=log_dir,
