@@ -496,6 +496,7 @@ class RobotCoverageEnv(gym.Env):
             "num_collisions": self.num_collisions,
             "coverage_percent": self.coverage_in_percent,
             "cells_missed": cells_missed,
+            "is_success": bool(cells_missed < CELLS_MISSED_THRESHOLD),
         }
         return obs, reward, terminated, truncated, info
 
