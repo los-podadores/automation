@@ -19,7 +19,7 @@ from env import collision as _col
 from env import maps as _maps
 from env import sensors as _sensors
 from env.config import (
-    CELLS_MISSED_THRESHOLD,
+    CELLS_MISSED_THRESHOLD,  # noqa: F401 — re-exported for external consumers
     DT,
     HEADING_NOISE,
     MAP_SIZE,
@@ -75,8 +75,12 @@ class RobotCoverageEnv(gym.Env):
                     low=0, high=1, shape=obs_shape, dtype=np.float32
                 ),
                 "sensors": spaces.Box(
-                    low=np.array([0.0] * 6 + [-1.0, -1.0], dtype=np.float32),
-                    high=np.array([1.0] * 6 + [1.0, 1.0], dtype=np.float32),
+                    low=np.array(
+                        [0.0] * 6 + [-1.0, -1.0, 0.0, -1.0, -1.0], dtype=np.float32
+                    ),
+                    high=np.array(
+                        [1.0] * 6 + [1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32
+                    ),
                     dtype=np.float32,
                 ),
             }

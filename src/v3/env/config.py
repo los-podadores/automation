@@ -20,8 +20,8 @@ RAY_MAX_DIST: float = 1.0
 SENSOR_DIM: int = 11
 
 # --- Reward weights ---
-REWARD_BASE_PENALTY: float = -0.04
-REWARD_COLLISION: float = -5.0
+REWARD_BASE_PENALTY: float = -0.05
+REWARD_COLLISION: float = -3.0
 REWARD_TV_SCALE: float = 2.0
 REWARD_TV_MAX: float = 3.0
 REWARD_AREA_SCALE: float = 1.5
