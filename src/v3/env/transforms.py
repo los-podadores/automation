@@ -72,6 +72,17 @@ def get_transform_matrix(
     return t2 @ rot @ t1
 
 
+def block_max_pool(img: np.ndarray, block: int) -> np.ndarray:
+    h, w = img.shape
+    pad_h = (-h) % block
+    pad_w = (-w) % block
+    if pad_h or pad_w:
+        img = np.pad(img, ((0, pad_h), (0, pad_w)), mode="constant")
+    h2, w2 = img.shape
+    reshaped = img.reshape(h2 // block, block, w2 // block, block)
+    return reshaped.max(axis=(1, 3))
+
+
 def get_relative_map(
     world_map: np.ndarray,
     pad_value: float,
@@ -84,19 +95,18 @@ def get_relative_map(
     sc = min(scale, grid_size_p)
 
     if is_frontier:
-        kernel_size = int(math.ceil(sc))
-        if kernel_size > 1:
-            kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
-            world_map = cv2.dilate(world_map, kernel)
-        interp_method = cv2.INTER_NEAREST
+        pooled = block_max_pool(world_map, int(round(sc)))
+        downsampled = cv2.resize(
+            pooled,
+            (int(0.5 + grid_size_p / sc),) * 2,
+            interpolation=cv2.INTER_NEAREST,
+        )
     else:
-        interp_method = cv2.INTER_AREA
-
-    downsampled = cv2.resize(
-        world_map,
-        (int(0.5 + grid_size_p / sc),) * 2,
-        interpolation=interp_method,
-    )
+        downsampled = cv2.resize(
+            world_map,
+            (int(0.5 + grid_size_p / sc),) * 2,
+            interpolation=cv2.INTER_AREA,
+        )
     return cv2.warpAffine(
         downsampled,
         M=transform_matrix[:2],

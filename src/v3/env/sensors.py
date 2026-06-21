@@ -101,27 +101,27 @@ def compute_sensors(
 
     normalized_dists = [d / RAY_MAX_DIST for d in dists]
 
-    # # Homing beacon to closest frontier
-    # frontier_y, frontier_x = np.where(frontier_map > 0)
-    # if len(frontier_x) == 0:
-    #     homing_dist, homing_cos, homing_sin = 0.0, 0.0, 0.0
-    # else:
-    #     agent_px, agent_py = m_to_grid_px(agent_pos_m, render_offset, pixels_per_meter)
-    #     distances = np.sqrt((frontier_x - agent_px) ** 2 + (frontier_y - agent_py) ** 2)
-    #     min_idx = np.argmin(distances)
+    # Homing beacon to closest frontier
+    frontier_y, frontier_x = np.where(frontier_map > 0)
+    if len(frontier_x) == 0:
+        homing_dist, homing_cos, homing_sin = 0.0, 0.0, 0.0
+    else:
+        agent_px, agent_py = m_to_grid_px(agent_pos_m, render_offset, pixels_per_meter)
+        distances = np.sqrt((frontier_x - agent_px) ** 2 + (frontier_y - agent_py) ** 2)
+        min_idx = np.argmin(distances)
 
-    #     dy = frontier_y[min_idx] - agent_py
-    #     dx = frontier_x[min_idx] - agent_px
-    #     target_angle = math.atan2(dy, dx)
-    #     rel_angle = target_angle - agent_heading
+        dy = frontier_y[min_idx] - agent_py
+        dx = frontier_x[min_idx] - agent_px
+        target_angle = math.atan2(dy, dx)
+        rel_angle = target_angle - agent_heading
 
-    #     max_map_dist = MAP_SIZE * pixels_per_meter
-    #     homing_dist = min(distances[min_idx] / max_map_dist, 1.0)
-    #     homing_cos = math.cos(rel_angle)
-    #     homing_sin = math.sin(rel_angle)
+        max_map_dist = MAP_SIZE * pixels_per_meter
+        homing_dist = min(distances[min_idx] / max_map_dist, 1.0)
+        homing_cos = math.cos(rel_angle)
+        homing_sin = math.sin(rel_angle)
 
     sensors = np.array(
-        normalized_dists + [last_v, last_w],
+        normalized_dists + [last_v, last_w, homing_dist, homing_cos, homing_sin],
         dtype=np.float32,
     )
     return sensors, hit_points

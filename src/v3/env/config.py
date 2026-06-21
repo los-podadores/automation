@@ -17,7 +17,7 @@ RAY_COLORS: list[tuple[int, int, int]] = [
 ]
 NUM_RAYS: int = 6
 RAY_MAX_DIST: float = 1.0
-SENSOR_DIM: int = 8
+SENSOR_DIM: int = 11
 
 # --- Reward weights ---
 REWARD_BASE_PENALTY: float = -0.04

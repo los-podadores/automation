@@ -303,7 +303,7 @@ class RobotCoverageEnv(gym.Env):
         steering = float(np.clip(action[1], -1.0, 1.0))
 
         lin_vel = throttle * ROBOT_SPEED_V
-        lin_vel *= 1 - abs(steering) * 0.5
+        lin_vel *= 1 - abs(steering) * 0.2
         ang_vel = steering * ROBOT_SPEED_W
 
         old_pos = self.agent_pos_m.copy()
