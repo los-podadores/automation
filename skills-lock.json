@@ -6,6 +6,36 @@
       "sourceType": "github",
       "skillPath": "plugins/modern-python/skills/modern-python/SKILL.md",
       "computedHash": "9d30ad6831ecc4b0ba267a20fddd5414c0bc8016a6c533352833b40016396b7b"
+    },
+    "python-code-style": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-code-style/SKILL.md",
+      "computedHash": "35ed0c437f33462187b0a89da8e5bfe9ac259dbc8731257c5445f1a5e1229acf"
+    },
+    "python-design-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-design-patterns/SKILL.md",
+      "computedHash": "593f109cffd8f81019e364102ee239053c7f4477c8ad901b9551fc4afaf22bd0"
+    },
+    "python-performance-optimization": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-performance-optimization/SKILL.md",
+      "computedHash": "5a0e5ccd00cd8e850e1068707e042339e182190eb89f8a300f58c18f53876059"
+    },
+    "python-project-structure": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-project-structure/SKILL.md",
+      "computedHash": "2f4f560964af8ecad4d54666c044baa54671d0abd1136c848b539befe24db170"
+    },
+    "python-type-safety": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-type-safety/SKILL.md",
+      "computedHash": "16314aa8a4a465773be809c517f62f8ef704f5ab1bb237e8c9b8a759689fcb21"
     }
   }
 }

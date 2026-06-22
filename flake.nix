@@ -50,11 +50,18 @@
               pkg-config
               freetype
               sdl2-compat
+
+              gcc
+              cmake
+              ninja
+              bazel_8
             ];
           buildInputs = [ pkgs.bashInteractive ];
           env = {
           };
-          shellHook = "";
+          shellHook = ''
+            export PATH="${pkgs.cmake}:${pkgs.ninja}:$PATH"
+          '';
         };
       }
     );
