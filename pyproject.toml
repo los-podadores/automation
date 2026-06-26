@@ -10,4 +10,10 @@ dependencies = [
     "pygame-ce>=2.5.7",
     "shapely>=2.1.2",
     "stable-baselines3[extra]>=2.8.0",
+    "ultralytics>=8.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.20",
 ]

@@ -178,3 +178,4 @@ pyrightconfig.json
 logs/
 .antigravitycli
 models/
+datasets/
