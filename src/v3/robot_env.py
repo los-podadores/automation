@@ -242,7 +242,7 @@ class RobotCoverageEnv(gym.Env):
             self.grid_size_p,
         )
         self.frontier_map = _maps.compute_frontier_map(
-            self.coverage_map, self.obstacle_map
+            self.coverage_map, self.collision_map
         )
 
         self.total_cells = max(int(self.coverable_area.sum()), 1)
@@ -307,7 +307,7 @@ class RobotCoverageEnv(gym.Env):
         steering = float(np.clip(action[1], -1.0, 1.0))
 
         lin_vel = throttle * ROBOT_SPEED_V
-        lin_vel *= 1 - abs(steering) * 0.2
+        lin_vel *= 1 - abs(steering) * 0.5
         ang_vel = steering * ROBOT_SPEED_W
 
         old_pos = self.agent_pos_m.copy()
@@ -383,7 +383,7 @@ class RobotCoverageEnv(gym.Env):
             )
 
         self.frontier_map = _maps.compute_frontier_map(
-            self.coverage_map, self.obstacle_map
+            self.coverage_map, self.collision_map
         )
 
         new_frontier_distance = _sensors.get_distance_to_closest_frontier(

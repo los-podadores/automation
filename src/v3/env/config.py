@@ -20,17 +20,17 @@ RAY_MAX_DIST: float = 1.0
 SENSOR_DIM: int = 11
 
 # --- Reward weights ---
-REWARD_BASE_PENALTY: float = -0.05
+REWARD_BASE_PENALTY: float = -0.075  # TODO: maybe increase
 REWARD_COLLISION: float = -3.0
-REWARD_TV_SCALE: float = (
-    2.0  # TODO: if things still dont improve this is the next value to reduce
-)
+REWARD_TV_SCALE: float = 1.5  # TODO: maybe reduce a little more
 REWARD_TV_MAX: float = 3.0
 REWARD_AREA_SCALE: float = 1.5
 REWARD_AREA_MAX: float = 2.0
 # --- Dynamics ---
-ROBOT_SPEED_V: float = 0.15
-ROBOT_SPEED_W: float = 1.0
+ROBOT_SPEED_V: float = (
+    0.1  # TODO: too slow? or too little time per phase (this ones bad bad)
+)
+ROBOT_SPEED_W: float = 0.7
 DT: float = 0.5
 
 # --- Map / grid ---
@@ -52,7 +52,7 @@ SPAWN_SAFETY_RADIUS_PX: int = 1
 # --- Episode / curriculum ---
 MAX_FIELD_ATTEMPTS: int = 100
 SUCCESS_WINDOW: int = 50
-SUCCESS_THRESHOLD: float = 0.8
+SUCCESS_THRESHOLD: float = 0.85
 MAX_NON_NEW_STEPS: int = 750
 CELLS_MISSED_THRESHOLD: int = 20
 PHASE_WEIGHT_DECAY: float = 0.5
