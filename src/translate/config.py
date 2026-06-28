@@ -17,32 +17,33 @@ IOU_THRESHOLD: Final[float] = 0.50
 IMAGE_SIZE: Final[int] = 640
 
 # --- ROD-Dataset class names (25 classes) ---
+# Order must match the dataset's data.yaml / class_distribution.csv
 ROD_CLASSES: Final[list[str]] = [
-    "Car",
-    "Bus",
-    "Truck",
-    "Motorcycle",
-    "Bike",
-    "Person",
-    "Dog",
-    "Building",
-    "Tree",
-    "Stairs",
-    "Manhole",
-    "Guard rail",
-    "Pedestrian crosswalk",
-    "Road",
-    "Dustbin",
-    "Bench",
-    "Chair",
-    "Plant Pot",
-    "Electrical Pole",
-    "Electrical Box",
-    "Bicycle Rack",
-    "Traffic Cone",
-    "Traffic Barrel",
-    "Traffic Sign",
-    "Fire Hydrant",
+    "Bike",                # 0
+    "Building",            # 1
+    "Car",                 # 2
+    "Person",              # 3
+    "Stairs",              # 4
+    "Traffic Sign",        # 5
+    "Electrical Pole",     # 6
+    "Road",                # 7
+    "Motorcycle",          # 8
+    "Dustbin",             # 9
+    "Dog",                 # 10
+    "Manhole",             # 11
+    "Tree",                # 12
+    "Guard rail",          # 13
+    "Pedestrian crosswalk",# 14
+    "Truck",               # 15
+    "Bus",                 # 16
+    "Bench",               # 17
+    "Traffic Cone",        # 18
+    "Fire Hydrant",        # 19
+    "Traffic Barrel",      # 20
+    "Plant Pot",           # 21
+    "Electrical Box",      # 22
+    "Chair",               # 23
+    "Bicycle Rack",        # 24
 ]
 
 # Classes that block the robot path during inter-lawn transit
