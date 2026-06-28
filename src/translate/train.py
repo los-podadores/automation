@@ -23,8 +23,9 @@ def find_data_yaml(dataset_dir: Path) -> Path | None:
     """Locate data.yaml inside the dataset directory. Returns None if not found."""
     candidates = [
         dataset_dir / "ROD-Dataset" / "dataset" / "data.yaml",
-        dataset_dir / "ROD-Dataset" / "data.yaml",
-        dataset_dir / "data.yaml",
+        # These two could cause some problems if we aren't careful, so let's keep them commented out for now.
+        # dataset_dir / "ROD-Dataset" / "data.yaml",
+        # dataset_dir / "data.yaml",
     ]
     for p in candidates:
         if p.exists():

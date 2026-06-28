@@ -12,6 +12,7 @@ dependencies = [
     "stable-baselines3[extra]>=2.8.0",
     "ultralytics>=8.0.0",
     "kagglehub",
+    "tensorboard",
     "torch",
     "torchvision",
 ]
