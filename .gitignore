@@ -177,5 +177,5 @@ pyrightconfig.json
 .direnv
 logs/
 .antigravitycli
-models/
+#models/
 datasets/
