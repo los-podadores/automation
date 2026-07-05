@@ -4,6 +4,7 @@ Usage:
     uv run python -m src.translate.demo
     uv run python -m src.translate.demo --images 10
     uv run python -m src.translate.demo --image path/to/image.jpg
+    uv run python -m src.translate.demo --video path/to/video.mp4 --weights yolov8s.pt
 """
 
 from __future__ import annotations
@@ -86,6 +87,89 @@ def run_detection(detector: ObstacleDetector, images: list[Path], output_dir: Pa
     print(f"Annotated images saved to: {output_dir}/")
 
 
+def run_video_detection(
+    detector: ObstacleDetector,
+    video_path: Path,
+    output_dir: Path,
+    show: bool = False,
+    skip_frames: int = 1,
+    scale: float = 1.0,
+) -> None:
+    """Run detection on a video and save the annotated video."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        print(f"Error: could not open video {video_path}")
+        return
+        
+    orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    width = int(orig_width * scale)
+    height = int(orig_height * scale)
+    out_fps = fps / skip_frames
+    
+    out_path = output_dir / f"det_{video_path.name}"
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(out_path), fourcc, out_fps, (width, height))
+    
+    print(f"\n--- Processing Video: {video_path.name} ---")
+    print(f"  Original: {orig_width}x{orig_height} @ {fps:.1f} fps")
+    if scale != 1.0 or skip_frames > 1:
+        print(f"  Output: {width}x{height} @ {out_fps:.1f} fps (scale={scale}, skip={skip_frames})")
+    
+    frame_idx = 0
+    total_detections = 0
+    t0_total = time.perf_counter()
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        if frame_idx % skip_frames != 0:
+            frame_idx += 1
+            continue
+            
+        if scale != 1.0:
+            frame = cv2.resize(frame, (width, height))
+            
+        detections = detector.detect(frame)
+        total_detections += len(detections)
+        
+        annotated = detector.annotate(frame, detections)
+        out.write(annotated)
+        
+        if show:
+            cv2.imshow("Real-Time Detection", annotated)
+            # Press 'q' to stop early
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("\n  [Detenido por el usuario]")
+                break
+        
+        frame_idx += 1
+        if frame_idx % 30 == 0:
+            print(f"  Processed frame {frame_idx}/{total_frames}...")
+            
+    cap.release()
+    out.release()
+    if show:
+        cv2.destroyAllWindows()
+    
+    elapsed = time.perf_counter() - t0_total
+    frames_processed = frame_idx // skip_frames
+    avg_fps = frames_processed / elapsed if elapsed > 0 else 0
+    
+    print(f"\nVideo processing complete.")
+    print(f"  Total frames processed: {frames_processed}/{total_frames}")
+    print(f"  Total detections: {total_detections}")
+    print(f"  Speed: {avg_fps:.1f} fps")
+    print(f"  Saved to: {out_path}")
+
+
 def run_planner_demo(detector: ObstacleDetector) -> None:
     """Demo the multi-lawn planner with a synthetic scenario."""
     print(f"\n{'='*50}")
@@ -145,25 +229,44 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Obstacle detection demo")
     parser.add_argument("--images", "-n", type=int, default=5, help="Number of test images to process")
     parser.add_argument("--image", "-i", type=str, default=None, help="Process a specific image instead of random test images")
+    parser.add_argument("--video", "-v", type=str, default=None, help="Process a specific video file")
+    parser.add_argument("--weights", "-w", type=str, default=None, help="Path to custom YOLO weights (e.g. yolov8s.pt)")
+    parser.add_argument("--show", action="store_true", help="Display the video in real-time during processing")
+    parser.add_argument("--skip", type=int, default=1, help="Process every Nth frame to speed up (e.g., 2 to process half frames)")
+    parser.add_argument("--scale", type=float, default=1.0, help="Scale down video resolution (e.g., 0.5 for half resolution)")
     parser.add_argument("--no-planner", action="store_true", help="Skip the multi-lawn planner demo")
     args = parser.parse_args()
 
-    print("Loading YOLOv8s model...")
-    detector = ObstacleDetector()
+    print("Loading YOLOv8 model...")
+    detector = ObstacleDetector(weights_path=args.weights)
     print("Model loaded.\n")
 
-    if args.image:
-        img_path = Path(args.image)
-        if not img_path.exists():
-            print(f"Error: image not found: {img_path}")
-            sys.exit(1)
-        images = [img_path]
-    else:
-        print(f"Picking {args.images} random test images...")
-        images = find_test_images(args.images)
-
     DEMO_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    run_detection(detector, images, DEMO_OUTPUT_DIR)
+
+    if args.video:
+        video_path = Path(args.video)
+        if not video_path.exists():
+            print(f"Error: video not found: {video_path}")
+            sys.exit(1)
+        run_video_detection(
+            detector, 
+            video_path, 
+            DEMO_OUTPUT_DIR, 
+            show=args.show,
+            skip_frames=args.skip,
+            scale=args.scale,
+        )
+    else:
+        if args.image:
+            img_path = Path(args.image)
+            if not img_path.exists():
+                print(f"Error: image not found: {img_path}")
+                sys.exit(1)
+            images = [img_path]
+        else:
+            print(f"Picking {args.images} random test images...")
+            images = find_test_images(args.images)
+        run_detection(detector, images, DEMO_OUTPUT_DIR)
 
     if not args.no_planner:
         run_planner_demo(detector)

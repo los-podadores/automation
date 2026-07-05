@@ -35,11 +35,13 @@ class Detection:
 
     @property
     def is_transit_obstacle(self) -> bool:
-        return self.class_name in TRANSIT_OBSTACLE_CLASSES
+        target = self.class_name.lower()
+        return any(target == c.lower() for c in TRANSIT_OBSTACLE_CLASSES)
 
     @property
     def is_navigable(self) -> bool:
-        return self.class_name in NAVIGABLE_CLASSES
+        target = self.class_name.lower()
+        return any(target == c.lower() for c in NAVIGABLE_CLASSES)
 
 
 class ObstacleDetector:
@@ -107,9 +109,7 @@ class ObstacleDetector:
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
-            class_name = (
-                ROD_CLASSES[cls_id] if cls_id < len(ROD_CLASSES) else f"cls_{cls_id}"
-            )
+            class_name = self.model.names.get(cls_id, f"cls_{cls_id}")
 
             detections.append(
                 Detection(
