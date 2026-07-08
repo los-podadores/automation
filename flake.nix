@@ -40,10 +40,9 @@
               wayland
               libxkbcommon
             ];
-          packages = with pkgs;
-            [
+          packages = pkgs.lib.flatten [
+            (with pkgs; [
               uv
-              nixd
               ruff
               bun
 
@@ -55,7 +54,8 @@
               cmake
               ninja
               bazel_8
-            ];
+            ])
+          ];
           buildInputs = [ pkgs.bashInteractive ];
           env = {
           };
