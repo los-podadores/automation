@@ -6,14 +6,30 @@ dependencies = [
     "gymnasium>=1.2.3",
     "matplotlib>=3.11.0",
     "numpy>=2.4.6",
-    "opencv-python>=4.6.0",
+    "opencv-python-headless>=4.6.0",
     "pygame-ce>=2.5.7",
     "shapely>=2.1.2",
     "stable-baselines3[extra]>=2.8.0",
     "ultralytics>=8.0.0",
+    "kagglehub",
+    "tensorboard",
+    "torch",
+    "torchvision",
 ]
+
 
 [dependency-groups]
 dev = [
     "ruff>=0.15.20",
 ]
+
+# --- LA SOLUCIÓN AQUÍ (Cambiado de 'indices' a 'index') ---
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+torchvision = { index = "pytorch-cuda" }
