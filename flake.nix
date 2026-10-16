@@ -44,10 +44,27 @@
       in
       {
         devShells.default = pkgs.mkShell {
+          LD_LIBRARY_PATH =
+            with pkgs;
+            lib.makeLibraryPath [
+              stdenv.cc.cc
+              zlib
+              glib
+              libxcb
+              libglvnd
+              libGL
+              SDL2
+              SDL2_image
+              SDL2_mixer
+              SDL2_ttf
+              alsa-lib
+              libX11
+              wayland
+              libxkbcommon
+            ];
           packages = pkgs.lib.flatten [
             (with pkgs; [
               uv
-              nixd
               ruff
               bun
 
@@ -72,7 +89,6 @@
           '';
 
           env = {
-            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath libs;
           };
         };
       }
