@@ -1,0 +1,17 @@
+[project]
+name = "los-podadores-v2"
+version = "0.1.0"
+requires-python = "==3.12.13"
+dependencies = [
+    "gymnasium>=1.0",
+    "ray[rllib]>=2.40",
+    "torch",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
