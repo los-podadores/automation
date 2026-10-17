@@ -164,7 +164,7 @@ class RoutePath:
         speed = min(speed, max(0.05, remaining * 0.7))
         return speed, max(-0.4, min(0.4, steering))
 
-    def crossers(self) -> dict:
+    def crossers(self, photo_posters: bool = False) -> dict:
         specs = {}
         for name, label, x, start, end, speed, phase, radius in (
             ("person_out", "persona", 30, 3.8, -3.8, 0.7, "IDA_RECTA", 0.36),
@@ -184,6 +184,13 @@ class RoutePath:
                 trigger_s=location.s - 6,
                 radius=radius,
             )
+            if photo_posters:
+                specs[name].update(
+                    photo_poster=True,
+                    trigger_s=location.s - 10,
+                    end_y=math.copysign(10.0, end),
+                    radius=0.5 if label == "persona" else 0.65,
+                )
         return specs
 
     def gate_observations(self) -> list[Observation]:

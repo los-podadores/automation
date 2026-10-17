@@ -421,13 +421,17 @@ def create_obstacle_world(crossers: dict | None = None) -> ET.Element:
 
 
 def create_route_world(
-    geometry: dict, config: dict, time_scale: float = 1
+    geometry: dict, config: dict, time_scale: float = 1, photo_posters: bool = False
 ) -> ET.Element:
     from route import RoutePath
 
     route = RoutePath(geometry, config)
     sdf = create_obstacle_world(route.crossers())
     world = sdf.find("world")
+    if photo_posters:
+        from photo_posters import add_posters
+
+        add_posters(world, route.crossers(True))
     world.set("name", "tractor_route")
     world.find("physics/real_time_factor").text = str(time_scale)
     gui = element(world, "gui", fullscreen="false")

@@ -271,7 +271,7 @@ Cierra el panel y Gazebo anteriores. Si estás dentro de Ubuntu, `exit` vuelve a
 PowerShell. Desde la carpeta `automation`:
 
 ```powershell
-.\.venv\Scripts\python.exe sim/tractor/vision.py --launch --vision-brake
+.\.venv\Scripts\python.exe sim/tractor/vision.py --launch --vision-brake --photo-posters
 ```
 
 También existe el acceso directo:
@@ -343,12 +343,51 @@ Sin `--vision-brake`, YOLO conserva el modo de observación `monitor_only`.
 frenar un tractor que ve una escena distinta**. No se admite combinarlos con
 `--vision-brake`. Usa una sesión nueva al cambiar el modo.
 
-El modelo ya detectó personas en el video real `PODADORAS.mp4` y un perro en una
-imagen del conjunto de prueba ROD. **Los actores actuales del simulador son
-figuras geométricas** y no tienen la apariencia de esas imágenes reales. En una
-captura probada, el perro geométrico no fue detectado. La conexión cámara → YOLO
-funciona, pero todavía falta validar reconocimiento fiable dentro del simulador
-con actores realistas o entrenamiento adicional con imágenes simuladas.
+Con `--photo-posters` los cuatro cruces usan **fotografías sobre paneles 3D**.
+Sin esa opción continúan las figuras geométricas originales, que el modelo aún
+reconoce mal. El acceso `start_vision.ps1` activa fotos y parada YOLO.
+
+### Carteles con fotografías reales
+
+Los archivos preparados están en `assets/posters/`:
+
+- `person.jpg`: recorte sin anotaciones del segundo 80 del video `PODADORAS.mp4`
+  que proporcionaste. Cartel de **0,95 × 1,80 m**.
+- `dog.jpg`: foto real `IMG_20296.jpg` del directorio de prueba ROD ya presente
+  en el proyecto, recortada alrededor del perro. Cartel de **1,094 × 2,00 m**.
+  Es una fotografía ampliada para probar el detector a 640 × 360; el tamaño del
+  cartel no representa el tamaño físico del animal.
+- `panel.obj`: malla con textura y coordenadas UV en las dos caras. La cámara
+  puede verla en ida y regreso; no se superpone la foto sobre la imagen del visor.
+- `sources.json`: procedencia, recortes y hashes de las fotografías preparadas.
+
+La textura atraviesa el renderizador de Gazebo y aparece en el RGB-D real de
+la cámara virtual. YOLO procesa esos píxeles con los pesos existentes: **no se
+inyectan etiquetas ni cajas**. Las colisiones usan un panel físico y un radio
+conservador que cubre toda su anchura; se conserva el respaldo geométrico.
+
+Para evitar una espera permanente frente a un cartel estacionado, cada panel
+permanece oculto bajo el terreno antes de su cruce. Aparece y empieza a moverse
+cuando el tractor está a unos **10 m del cruce**. Continúa hasta **10 m al otro
+lado** y se oculta al completar su recorrido. El movimiento continúa mientras
+el tractor espera. Esta aparición programada pertenece al escenario de prueba;
+YOLO no decide cuándo aparece el obstáculo.
+
+Se mantienen los cruces de ida en **30 m y 85 m**, y los de regreso en **70 m y
+20 m**, además de los **110 m**, la curva, la puerta y el retorno. El visor
+mostrará **FRENAR YOLO**, **ESPERAR YOLO** y **CONTINUAR** según las detecciones.
+
+No hay que instalar dependencias nuevas ni entrenar otra vez. Si necesitas
+reconstruir las fotos desde los archivos originales, en PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/prepare_posters.py
+```
+
+El script usa el video de `Videos/PODADORAS.mp4` y la foto local ROD; admite
+`--person-video`, `--person-image` y `--dog-image` para indicar otras fuentes.
+Conserva los permisos de las fuentes antes de redistribuir las fotos. Una prueba
+con estos dos ejemplos no mide precisión global ni demuestra generalización.
 
 Esta parada se conecta únicamente al **tractor simulado**. Para depender del
 reconocimiento visual falta validar personas/perros en distintos tamaños,
@@ -451,6 +490,28 @@ persona/perro, espera antes de reanudar, resultados congelados y prioridad de la
 parada manual. Guarda `brake_validation.json` en su propia sesión. La prueba del
 adaptador no demuestra que YOLO reconozca las figuras geométricas del escenario.
 Las pruebas de política sin Gazebo están en `tests/test_vision_brake.py`.
+
+Para probar **detecciones reales sobre los carteles renderizados**, con parada
+y reanudación, sin inyección de resultados:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/tests/validate_photo_posters.py
+```
+
+Con `--full-route` comprueba también los dos cruces de regreso y el final del
+recorrido. La prueba usa una sesión aislada, avanza el tiempo de Gazebo a 2× y
+mantiene las velocidades físicas. `--time-scale 1` conserva el tiempo normal.
+Guarda `photo_validation.json` y las capturas `*_detected.jpg` y
+`*_mid_crossing.jpg` en su carpeta de sesión. Además comprueba que YOLO mantiene
+la parada cuando el respaldo geométrico permite avanzar, para distinguir las
+dos fuentes de decisión.
+
+Validación local del 17/10/2026: **3.572 fotogramas reales**, cuatro cruces con
+detección, parada y reanudación, dos pasos por la puerta y regreso completo.
+`photo_validation.json` y el informe físico marcaron `passed: true`; el error
+final fue **0,194 m**, con separación mínima a los actores de **2,315 m** y a la
+puerta de **0,794 m**. Pasaron las **67 pruebas** en Ubuntu. Son resultados de
+esta escena y estas fotografías, sin detecciones sintéticas.
 
 ## 7. Qué se tomó del CAD y qué falta calibrar
 

@@ -18,14 +18,17 @@ from teleop import GazeboCommands
 
 
 class RouteDemo:
-    def __init__(self, vision_brake=None):
+    def __init__(self, vision_brake=None, photo_posters=False):
         self.vision_brake = vision_brake
+        self.photo_posters = photo_posters
+        self.geometric_decision = None
+        self.vision_decision = None
         self.geometry = json.loads(
             (ROOT / "cad_dimensions.json").read_text(encoding="utf-8")
         )
         self.config = load_route_config(self.geometry)
         self.route = RoutePath(self.geometry, self.config)
-        self.crossers = self.route.crossers()
+        self.crossers = self.route.crossers(photo_posters)
         self.observer = SceneObserver(
             "tractor_route", self.geometry["rear"]["wheel_radius_m"], self.crossers
         )
@@ -60,6 +63,7 @@ class RouteDemo:
         self.commands.stop()
 
     def tick(self):
+        self.geometric_decision = self.vision_decision = None
         vehicle, observations, fresh = self.observer.snapshot()
         self.vehicle = vehicle
         sim_time = vehicle.sim_time if vehicle else 0.0
@@ -185,10 +189,22 @@ class RouteDemo:
                     sim_time,
                     fresh and not self.scenario.error,
                 )
+                self.geometric_decision = decision
                 if self.vision_brake is not None:
                     vision_decision = self.vision_brake.poll(sim_time)
+                    self.vision_decision = vision_decision
                     if not vision_decision.allowed:
                         decision = vision_decision
+                    if (
+                        self.photo_posters
+                        and decision.state == "FRENAR YOLO"
+                        and vehicle
+                        and abs(vehicle.speed) < 0.03
+                    ):
+                        for name in self.scenario.active:
+                            kind = "person" if name.startswith("person") else "dog"
+                            if kind in self.vision_brake.labels:
+                                self.stopped_for.add(name)
             if (
                 decision.obstacle in self.crossers
                 and decision.state == "ESPERAR"
@@ -287,6 +303,7 @@ def main():
     )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--vision-brake", action="store_true")
+    parser.add_argument("--photo-posters", action="store_true")
     parser.add_argument(
         "--control-dir",
         type=Path,
@@ -319,7 +336,7 @@ def main():
         ):
             parser.error("--vision-brake requiere --control-dir con session.json")
         vision_brake = VisionBrake(args.control_dir, session["session_id"])
-    demo = RouteDemo(vision_brake)
+    demo = RouteDemo(vision_brake, args.photo_posters)
     try:
         if args.control_dir is not None:
             from session_control import RouteOperator

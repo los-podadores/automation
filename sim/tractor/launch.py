@@ -13,7 +13,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from build_model import ROOT, main as build, plugin, write_xml
+from build_model import ROOT, main as build, plugin, write_xml, create_route_world
 
 
 def simulation_environment(
@@ -112,6 +112,11 @@ def main() -> int:
         help="Parada por YOLO con respaldo geométrico",
     )
     parser.add_argument(
+        "--photo-posters",
+        action="store_true",
+        help="Personas y perros como carteles fotográficos móviles",
+    )
+    parser.add_argument(
         "--frames-dir", type=Path, default=ROOT.parents[1] / "runs/tractor_camera/live"
     )
     parser.add_argument(
@@ -131,6 +136,8 @@ def main() -> int:
         parser.error("--camera requiere --route")
     if args.vision_brake and not args.camera:
         parser.error("--vision-brake requiere --camera")
+    if args.photo_posters and not args.route:
+        parser.error("--photo-posters requiere --route")
     args.obstacles = args.obstacles or args.demo
     try:
         build()
@@ -154,8 +161,19 @@ def main() -> int:
         )
     )
     temporary_world = None
-    if args.route and (args.time_scale != 1 or args.camera):
-        document = ET.parse(world_path).getroot()
+    if args.route and (args.time_scale != 1 or args.camera or args.photo_posters):
+        if args.photo_posters:
+            from route import load_route_config
+            import json
+
+            geometry = json.loads(
+                (ROOT / "cad_dimensions.json").read_text(encoding="utf-8")
+            )
+            document = create_route_world(
+                geometry, load_route_config(geometry), photo_posters=True
+            )
+        else:
+            document = ET.parse(world_path).getroot()
         document.find("world/physics/real_time_factor").text = str(args.time_scale)
         if args.camera:
             plugin(
@@ -220,6 +238,8 @@ def main() -> int:
             controller.extend(["--control-dir", str(args.frames_dir)])
         if args.vision_brake:
             controller.append("--vision-brake")
+        if args.photo_posters:
+            controller.append("--photo-posters")
         if (args.demo or args.route) and args.headless:
             controller.append("--headless")
         elif args.obstacles and not args.demo:

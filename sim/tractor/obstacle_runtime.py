@@ -21,6 +21,7 @@ class SceneObserver:
         from gz.transport13 import Node
 
         self.lock = threading.Lock()
+        self.world = world
         self.rear_radius = rear_radius
         self.crossers = CROSSERS if crossers is None else crossers
         self.vehicle: VehicleState | None = None
@@ -97,6 +98,7 @@ class CrossingScenario:
         self.progress = 0.0
         self.stopped = threading.Event()
         self.error = ""
+        self.active = frozenset()
         self.thread = threading.Thread(
             target=self.run, daemon=True, name="crossing-scenario"
         )
@@ -105,6 +107,8 @@ class CrossingScenario:
         self.thread.start()
 
     def run(self) -> None:
+        from gz.msgs10.boolean_pb2 import Boolean
+        from gz.msgs10.pose_pb2 import Pose
         from gz.msgs10.twist_pb2 import Twist
         from gz.transport13 import Node
 
@@ -114,6 +118,22 @@ class CrossingScenario:
             for name in self.observer.crossers
         }
         active: set[str] = set()
+        completed: set[str] = set()
+
+        def place_poster(name, spec, y, z):
+            pose = Pose()
+            pose.name = name
+            pose.position.x, pose.position.y, pose.position.z = spec["x"], y, z
+            yaw = math.copysign(math.pi / 2, spec["end_y"] - spec["start_y"])
+            pose.orientation.z, pose.orientation.w = (
+                math.sin(yaw / 2),
+                math.cos(yaw / 2),
+            )
+            success, response = node.request(
+                f"/world/{self.observer.world}/set_pose", pose, Pose, Boolean, 200
+            )
+            return success and response.data
+
         try:
             while not self.stopped.wait(0.05):
                 vehicle, observations, fresh = self.observer.snapshot()
@@ -125,15 +145,34 @@ class CrossingScenario:
                         if "trigger_s" in spec
                         else vehicle is not None and vehicle.x >= spec["trigger_x"]
                     )
-                    if triggered:
-                        active.add(name)
+                    if triggered and name not in active and name not in completed:
+                        if not spec.get("photo_poster") or (
+                            fresh and place_poster(name, spec, spec["start_y"], 0)
+                        ):
+                            active.add(name)
+                            self.active = frozenset(active - completed)
+                        elif fresh:
+                            self.error = "No se pudo activar un cartel fotográfico"
                     message = Twist()
-                    if fresh and name in active and name in positions:
+                    if (
+                        fresh
+                        and name in active
+                        and name not in completed
+                        and name in positions
+                    ):
                         direction = math.copysign(1.0, spec["end_y"] - spec["start_y"])
                         remaining = direction * (spec["end_y"] - positions[name].y)
                         if remaining > 0.03:
                             # VelocityControl uses the model frame; +X points across the lane.
                             message.linear.x = min(spec["speed"], 2 * remaining)
+                        elif spec.get("photo_poster"):
+                            from photo_posters import HIDDEN_Z
+
+                            if place_poster(name, spec, spec["end_y"], HIDDEN_Z):
+                                completed.add(name)
+                                self.active = frozenset(active - completed)
+                            else:
+                                self.error = "No se pudo retirar un cartel fotográfico"
                     if not publishers[name].publish(message):
                         self.error = "No se pudo actualizar un obstáculo"
         except Exception as exc:

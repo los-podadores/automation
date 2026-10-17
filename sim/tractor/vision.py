@@ -235,7 +235,11 @@ def launch_gazebo(args):
     args.frames_dir.mkdir(parents=True)
     write_json(
         args.frames_dir / "session.json",
-        dict(session_id=session, vision_brake=getattr(args, "vision_brake", False)),
+        dict(
+            session_id=session,
+            vision_brake=getattr(args, "vision_brake", False),
+            photo_posters=getattr(args, "photo_posters", False),
+        ),
     )
     linux = subprocess.run(
         [
@@ -285,6 +289,9 @@ def launch_gazebo(args):
             command.append("--headless")
         if getattr(args, "vision_brake", False):
             command.append("--vision-brake")
+        if getattr(args, "photo_posters", False):
+            command.append("--photo-posters")
+        command.extend(["--time-scale", str(getattr(args, "time_scale", 1))])
         process = subprocess.Popen(
             command,
             stdout=log,
@@ -324,7 +331,9 @@ def show_window(monitor, simulation):
     ).grid()
     ttk.Label(
         panel,
-        text="Respaldo geométrico activo: YOLO aún reconoce mal las figuras simplificadas de Gazebo."
+        text="Carteles con fotos reales · Respaldo geométrico activo"
+        if getattr(monitor.args, "photo_posters", False)
+        else "Respaldo geométrico activo: YOLO aún reconoce mal las figuras simplificadas de Gazebo."
         if monitor.args.source is None
         else "No detectar algo no significa que el camino esté libre.",
     ).grid(pady=4)
@@ -485,6 +494,17 @@ def main():
     )
     parser.add_argument("--distribution", default="Ubuntu-24.04")
     parser.add_argument(
+        "--photo-posters",
+        action="store_true",
+        help="Cruces con fotos reales en paneles 3D",
+    )
+    parser.add_argument(
+        "--time-scale",
+        type=float,
+        default=1,
+        help="Velocidad del tiempo de Gazebo: 1 a 4",
+    )
+    parser.add_argument(
         "--vision-brake",
         action="store_true",
         help="Frena con Person/Dog en la cámara Gazebo de esta sesión; nunca con video grabado",
@@ -562,6 +582,10 @@ def main():
         parser.error(
             "--vision-brake usa solo la cámara Gazebo y su --frames-dir; sin --source ni --output-dir"
         )
+    if not np.isfinite(args.time_scale) or not 1 <= args.time_scale <= 4:
+        parser.error("--time-scale debe estar entre 1 y 4")
+    if (args.photo_posters or args.time_scale != 1) and not args.launch:
+        parser.error("--photo-posters y --time-scale requieren --launch")
     simulation = None
     try:
         # Verify weights/dependencies before opening a simulation.

@@ -1,0 +1,33 @@
+{
+  "person": {
+    "file": "PODADORAS.mp4",
+    "kind": "user video",
+    "second": 80,
+    "crop": [
+      550,
+      80,
+      760,
+      478
+    ]
+  },
+  "dog": {
+    "file": "IMG_20296.jpg",
+    "kind": "local ROD dataset test image",
+    "citation": "datasets/rod/citation_kaggle.md",
+    "crop": [
+      165,
+      0,
+      515,
+      640
+    ]
+  },
+  "note": "Local simulation fixtures, not a generalization benchmark. Retain source permissions before redistribution.",
+  "textures": {
+    "person.jpg": {
+      "sha256": "3c1bcb89eae4d620d776d7f631ed7ec1a9c8de4ddc2b68c6b30032f087fcef3a"
+    },
+    "dog.jpg": {
+      "sha256": "6619069a6c8562fc0294c3ea0332097eff83415338d5abc446489018f09ae120"
+    }
+  }
+}

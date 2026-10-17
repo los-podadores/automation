@@ -184,6 +184,18 @@ class RouteOperator:
                 progress_m=demo.progress,
                 length_m=demo.route.length,
                 speed_mps=vehicle.speed if vehicle else None,
+                sim_time_s=vehicle.sim_time if vehicle else None,
+                commanded_speed_mps=demo.speed,
+                geometric_allowed=demo.geometric_decision.allowed
+                if demo.geometric_decision
+                else None,
+                geometric_state=demo.geometric_decision.state
+                if demo.geometric_decision
+                else None,
+                vision_state=demo.vision_decision.state
+                if demo.vision_decision
+                else None,
+                active_crossers=sorted(demo.scenario.active),
                 x_m=vehicle.x if vehicle else None,
                 y_m=vehicle.y if vehicle else None,
                 gate_crossings=len(demo.gate_crossings),

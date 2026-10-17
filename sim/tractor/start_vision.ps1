@@ -8,7 +8,7 @@ $pythonPath = Join-Path $projectPath '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $pythonPath)) {
     throw 'Falta el entorno Python de Windows. En la carpeta automation ejecuta: uv sync'
 }
-$visionArgs = @('--launch', '--vision-brake', '--distribution', $Distribution)
+$visionArgs = @('--launch', '--vision-brake', '--photo-posters', '--distribution', $Distribution)
 if ($Weights) { $visionArgs += '--weights'; $visionArgs += $Weights }
 & $pythonPath (Join-Path $PSScriptRoot 'vision.py') @visionArgs
 if ($LASTEXITCODE -ne 0) {
