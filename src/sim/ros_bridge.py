@@ -262,3 +262,9 @@ class Ros2GazeboBridge:
                 self.node.destroy_node()
         except Exception:
             pass
+
+        try:
+            if hasattr(self, "rclpy") and self.rclpy.ok():
+                self.rclpy.shutdown()
+        except Exception:
+            pass

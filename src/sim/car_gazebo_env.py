@@ -354,6 +354,13 @@ class CarGazeboEnv(gym.Env):
         )
         goal_state = self._compute_goal_state()
 
+        tracked_obstacles = self.mock_perception.filter_and_noise(
+            self.car_x,
+            self.car_y,
+            self.car_yaw,
+            self.track.obstacles if self.track else [],
+        )
+
         if self.sim_mode == "gazebo":
             if self.ros_bridge is None:
                 raise RuntimeError(
@@ -362,16 +369,11 @@ class CarGazeboEnv(gym.Env):
             return self.map_builder.build_observation(
                 kinematics=kinematics,
                 goal_state=goal_state,
+                obstacles=tracked_obstacles,
                 pod_scans=self._current_scans,
             )
 
         # Mock perception fallback for pure mock simulation
-        tracked_obstacles = self.mock_perception.filter_and_noise(
-            self.car_x,
-            self.car_y,
-            self.car_yaw,
-            self.track.obstacles if self.track else [],
-        )
         wall_segments_ego = self._transform_walls_to_ego()
 
         return self.map_builder.build_observation(
@@ -554,8 +556,18 @@ class CarGazeboEnv(gym.Env):
             "pose": self.pose,
             "speed": self.car_vx,
             "dist_to_goal": curr_dist,
+            "lidar_source": "ros_gz" if (self.sim_mode == "gazebo" and len(self._current_scans) > 0) else "mock",
+            "active_pods": len(self._current_scans) if self.sim_mode == "gazebo" else 0,
+            "raw_lidar_points_ego": self.latest_raw_lidar_points_ego,
         }
         return obs, float(reward), terminated, truncated, info
+
+    @property
+    def latest_raw_lidar_points_ego(self) -> np.ndarray:
+        """Raw (N, 2) Cartesian hit points in ego coordinates from live 4-pod LiDARs."""
+        if self.sim_mode == "gazebo" and self._current_scans:
+            return self.map_builder.extract_point_cloud_ego(self._current_scans)
+        return np.empty((0, 2), dtype=np.float32)
 
     def close(self) -> None:
         if self.ros_bridge is not None:

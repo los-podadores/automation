@@ -107,6 +107,56 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         # Goal state check
         np.testing.assert_allclose(obs[6:12], goal_state.to_array())
 
+    def test_extract_point_cloud_ego(self) -> None:
+        samples = 180
+        ranges = np.full(samples, 15.0, dtype=np.float32)
+        ranges[samples // 2] = 3.0  # 3m ahead of front pod at x=1.05m -> ego x=4.05m, y=0.0m
+        pod_scans = {
+            "front": LaserScanData(
+                ranges=ranges,
+                angle_min=-1.047198,
+                angle_max=1.047198,
+                angle_increment=2.094396 / samples,
+            )
+        }
+        pts = self.builder.extract_point_cloud_ego(pod_scans)
+        self.assertEqual(pts.shape, (samples, 2))
+        # Center sample should be at x ~ 4.05, y ~ 0.0
+        center_pt = pts[samples // 2]
+        self.assertAlmostEqual(center_pt[0], 4.05, places=2)
+        self.assertAlmostEqual(center_pt[1], 0.0, places=2)
+
+    def test_semantic_obstacle_tagging_in_pod_fusion(self) -> None:
+        from src.translate.fusion_types import CLASS_PEDESTRIAN, TrackedObstacle
+
+        samples = 180
+        ranges = np.full(samples, 15.0, dtype=np.float32)
+        ranges[samples // 2] = 3.0  # Hit at ego x=4.05m, y=0.0m
+        pod_scans = {
+            "front": LaserScanData(
+                ranges=ranges,
+                angle_min=-1.047198,
+                angle_max=1.047198,
+                angle_increment=2.094396 / samples,
+            )
+        }
+        ped = TrackedObstacle(
+            class_id=CLASS_PEDESTRIAN,
+            class_name="person",
+            rel_x=4.05,
+            rel_y=0.0,
+            rel_vx=0.0,
+            rel_vy=0.0,
+            radius=0.45,
+            confidence=0.99,
+        )
+        distances, classes = self.builder.fuse_pod_scans(
+            pod_scans, obstacles=[ped]
+        )
+        zero_bin = int(math.floor((0.0 + math.pi) / (2.0 * math.pi / 72))) % 72
+        self.assertEqual(classes[zero_bin], float(CLASS_PEDESTRIAN))
+
 
 if __name__ == "__main__":
     unittest.main()
+

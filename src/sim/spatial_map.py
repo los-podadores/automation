@@ -76,11 +76,13 @@ class SpatialMapBuilder:
     def fuse_pod_scans(
         self,
         pod_scans: dict[str, LaserScanData],
+        obstacles: list[TrackedObstacle] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Fuse 4 distributed LaserScans into a 360-degree polar range and classification grid.
 
         Args:
             pod_scans: Mapping of pod name ('front', 'rear', 'right', 'left') to LaserScanData.
+            obstacles: Optional list of tracked obstacles in vehicle ego frame for semantic tagging.
 
         Returns:
             distances: (72,) normalized float array in [0.0, 1.0].
@@ -121,13 +123,48 @@ class SpatialMapBuilder:
             # Map azimuth to [0, 71] uniform angular bin
             bin_indices = np.floor((phi_ego + math.pi) / ANGULAR_RESOLUTION).astype(int) % self.num_rays
 
-            for b_idx, d in zip(bin_indices, d_ego):
+            for b_idx, d, xe, ye in zip(bin_indices, d_ego, x_ego, y_ego):
                 if d < distances[b_idx]:
                     distances[b_idx] = d
-                    classes[b_idx] = float(CLASS_STATIC_HAZARD)
+                    hit_cls = float(CLASS_STATIC_HAZARD)
+                    if obstacles:
+                        for obs in obstacles:
+                            if math.hypot(xe - obs.rel_x, ye - obs.rel_y) <= (obs.radius + 0.35):
+                                hit_cls = float(obs.to_spatial_code())
+                                break
+                    classes[b_idx] = hit_cls
 
         norm_distances = np.clip(distances / self.max_range, 0.0, 1.0)
         return norm_distances, classes
+
+    def extract_point_cloud_ego(
+        self, pod_scans: dict[str, LaserScanData]
+    ) -> np.ndarray:
+        """Extract all valid 2D Cartesian hit points (x_ego, y_ego) from 4-pod LiDARs."""
+        all_pts: list[np.ndarray] = []
+        for pod_name, scan in pod_scans.items():
+            if pod_name not in POD_CONFIGS or len(scan.ranges) == 0:
+                continue
+            x_pod, y_pod, yaw_pod = POD_CONFIGS[pod_name]
+            raw_ranges = np.asarray(scan.ranges, dtype=np.float32)
+            valid_mask = (
+                np.isfinite(raw_ranges)
+                & (raw_ranges >= scan.range_min)
+                & (raw_ranges <= scan.range_max)
+                & (raw_ranges <= self.max_range)
+            )
+            if not np.any(valid_mask):
+                continue
+            valid_r = raw_ranges[valid_mask]
+            n_samples = len(raw_ranges)
+            angles = scan.angle_min + np.arange(n_samples, dtype=np.float32) * scan.angle_increment
+            valid_ang = angles[valid_mask] + yaw_pod
+            x_ego = x_pod + valid_r * np.cos(valid_ang)
+            y_ego = y_pod + valid_r * np.sin(valid_ang)
+            all_pts.append(np.column_stack([x_ego, y_ego]))
+        if all_pts:
+            return np.vstack(all_pts).astype(np.float32)
+        return np.empty((0, 2), dtype=np.float32)
 
     def compute_ray_scan(
         self,
@@ -226,8 +263,8 @@ class SpatialMapBuilder:
         k_arr = kinematics.to_array()
         g_arr = goal_state.to_array()
 
-        if pod_scans is not None:
-            dist_arr, cls_arr = self.fuse_pod_scans(pod_scans)
+        if pod_scans is not None and len(pod_scans) > 0:
+            dist_arr, cls_arr = self.fuse_pod_scans(pod_scans, obstacles=obstacles)
         else:
             dist_arr, cls_arr = self.compute_ray_scan(
                 obstacles if obstacles is not None else [],

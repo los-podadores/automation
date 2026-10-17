@@ -100,6 +100,7 @@ class CarTeleopApp:
         self.steer_action: float = 0.0
         self.throttle_action: float = 0.0
         self.paused: bool = False
+        self.show_raw_point_cloud: bool = True
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
         if self.backend == "gazebo":
@@ -126,6 +127,11 @@ class CarTeleopApp:
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     return False
+                if event.key == pygame.K_l:
+                    self.show_raw_point_cloud = not self.show_raw_point_cloud
+                    mode_str = "High-Res Point Cloud" if self.show_raw_point_cloud else "72 Policy Bins"
+                    self.status_msg = f"LiDAR Render Mode: {mode_str}"
+                    self.status_timer = 50
                 if event.key == pygame.K_r:
                     self.obs, self.info = self.env.reset()
                     self.total_reward = 0.0
@@ -253,13 +259,15 @@ class CarTeleopApp:
             ]
             pygame.draw.lines(self.screen, (60, 130, 90), False, trail_pts, 2)
 
-        # 5. Draw 360-degree LiDAR Radar Rays
+        # 5. Draw 360-degree LiDAR Radar Rays & High-Res Returns
         # Observation layout: distances are [12:84], classes are [84:156]
         norm_dists = self.obs[12:84]
         hit_classes = self.obs[84:156]
         ray_angles = np.linspace(-math.pi, math.pi, LIDAR_NUM_RAYS, endpoint=False)
 
         car_screen = self.world_to_screen(car_x, car_y, car_x, car_y)
+
+        # 5a. Policy observation rays (subtle lines indicating the 72 RL spatial sectors)
         for i in range(LIDAR_NUM_RAYS):
             r_dist = float(norm_dists[i]) * LIDAR_MAX_RANGE
             r_ang = float(ray_angles[i]) + car_yaw
@@ -269,15 +277,29 @@ class CarTeleopApp:
 
             h_cls = int(hit_classes[i])
             if h_cls == CLASS_FREE:
-                color = (35, 60, 50)
+                color = (25, 45, 35)
             elif h_cls == CLASS_VEHICLE:
                 color = OBS_VEHICLE_COLOR
             elif h_cls == CLASS_PEDESTRIAN:
                 color = OBS_PED_COLOR
             else:
-                color = WALL_COLOR
+                color = (150, 45, 45) if self.show_raw_point_cloud else WALL_COLOR
 
             pygame.draw.line(self.screen, color, car_screen, end_screen, 1)
+
+        # 5b. Live ROS 2 LiDAR point cloud hits from 4 sensor pods
+        raw_pts = self.info.get("raw_lidar_points_ego", None)
+        if raw_pts is None or len(raw_pts) == 0:
+            raw_pts = getattr(self.env, "latest_raw_lidar_points_ego", np.empty((0, 2)))
+
+        if len(raw_pts) > 0 and self.show_raw_point_cloud:
+            cos_y = math.cos(car_yaw)
+            sin_y = math.sin(car_yaw)
+            wx_pts = car_x + raw_pts[:, 0] * cos_y - raw_pts[:, 1] * sin_y
+            wy_pts = car_y + raw_pts[:, 0] * sin_y + raw_pts[:, 1] * cos_y
+            for wx, wy in zip(wx_pts, wy_pts):
+                sp = self.world_to_screen(wx, wy, car_x, car_y)
+                pygame.draw.circle(self.screen, (255, 95, 85), sp, 2)
 
         # 6. Draw Obstacles (Box/Cylinder, Static/Dynamic)
         if self.env.track:
@@ -448,14 +470,27 @@ class CarTeleopApp:
             backend_lbl = self.font_small.render(
                 "BACKEND: GAZEBO 3D (ROS 2 BRIDGE) | ACKERMANN", True, TEXT_GREEN
             )
+            n_pods = self.info.get("active_pods", 0)
+            lidar_sub_lbl = self.font_small.render(
+                f"LIDAR: ROS 2 LIVE ({n_pods} Pods / 660 Beams, 20Hz)",
+                True,
+                TEXT_CYAN,
+            )
         else:
             backend_lbl = self.font_small.render(
                 f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN",
                 True,
                 TEXT_MUTED,
             )
+            lidar_sub_lbl = self.font_small.render(
+                "LIDAR: MOCK ANALYTICAL RAYCASTER (72 Rays)",
+                True,
+                TEXT_MUTED,
+            )
         self.screen.blit(backend_lbl, (x, y))
-        y += 30
+        y += 18
+        self.screen.blit(lidar_sub_lbl, (x, y))
+        y += 24
 
         # Mission Phase Header
         phase_idx = self.env.mission_phase
@@ -545,24 +580,48 @@ class CarTeleopApp:
         norm_dists = self.obs[12:84]
         hit_classes = self.obs[84:156]
         ray_angles = np.linspace(-math.pi, math.pi, LIDAR_NUM_RAYS, endpoint=False)
-        for i in range(LIDAR_NUM_RAYS):
-            d_ratio = float(norm_dists[i])
-            if d_ratio < 0.98:
-                ang = float(ray_angles[i]) - math.pi / 2.0  # +X forward is up on radar
-                rx = radar_cx + int(d_ratio * radar_rad * math.cos(ang))
-                ry = radar_cy + int(d_ratio * radar_rad * math.sin(ang))
-                h_cls = int(hit_classes[i])
-                col = (
-                    OBS_VEHICLE_COLOR
-                    if h_cls == CLASS_VEHICLE
-                    else OBS_PED_COLOR
-                    if h_cls == CLASS_PEDESTRIAN
-                    else WALL_COLOR
-                )
-                pygame.draw.circle(self.screen, col, (rx, ry), 2)
 
-        radar_lbl = self.font_small.render("360° LIDAR (15m)", True, TEXT_MUTED)
-        self.screen.blit(radar_lbl, (radar_cx - 45, radar_cy + radar_rad + 6))
+        raw_pts = self.info.get("raw_lidar_points_ego", None)
+        if raw_pts is None or len(raw_pts) == 0:
+            raw_pts = getattr(self.env, "latest_raw_lidar_points_ego", np.empty((0, 2)))
+
+        if len(raw_pts) > 0 and self.show_raw_point_cloud:
+            dists = np.hypot(raw_pts[:, 0], raw_pts[:, 1])
+            valid = dists <= LIDAR_MAX_RANGE
+            d_norm = dists[valid] / LIDAR_MAX_RANGE
+            ego_ang = np.arctan2(raw_pts[valid, 1], raw_pts[valid, 0])
+            radar_ang = ego_ang - math.pi / 2.0
+            for d_r, ang in zip(d_norm, radar_ang):
+                rx = radar_cx + int(d_r * radar_rad * math.cos(ang))
+                ry = radar_cy + int(d_r * radar_rad * math.sin(ang))
+                pygame.draw.circle(self.screen, (255, 90, 80), (rx, ry), 1)
+        else:
+            for i in range(LIDAR_NUM_RAYS):
+                d_ratio = float(norm_dists[i])
+                if d_ratio < 0.98:
+                    ang = float(ray_angles[i]) - math.pi / 2.0  # +X forward is up on radar
+                    rx = radar_cx + int(d_ratio * radar_rad * math.cos(ang))
+                    ry = radar_cy + int(d_ratio * radar_rad * math.sin(ang))
+                    h_cls = int(hit_classes[i])
+                    col = (
+                        OBS_VEHICLE_COLOR
+                        if h_cls == CLASS_VEHICLE
+                        else OBS_PED_COLOR
+                        if h_cls == CLASS_PEDESTRIAN
+                        else WALL_COLOR
+                    )
+                    pygame.draw.circle(self.screen, col, (rx, ry), 2)
+
+        lidar_src = self.info.get("lidar_source", "mock")
+        if lidar_src == "ros_gz":
+            n_hits = len(raw_pts) if raw_pts is not None else 0
+            n_pods = self.info.get("active_pods", 4)
+            radar_lbl = self.font_small.render(
+                f"ROS 2 LiDAR ({n_pods}p, {n_hits}pts)", True, TEXT_CYAN
+            )
+        else:
+            radar_lbl = self.font_small.render("360° LIDAR (15m)", True, TEXT_MUTED)
+        self.screen.blit(radar_lbl, (radar_cx - 55, radar_cy + radar_rad + 6))
         y += 170
 
         # Status Message Banner
@@ -583,6 +642,7 @@ class CarTeleopApp:
             "  [A / D]  Steer Left / Right (Ackermann)",
             "  [Space]  Handbrake (instant stop)",
             "  [Tab]    Cycle Phase (A->B, Hold, B->A)",
+            "  [L]      Toggle High-Res LiDAR Cloud",
             "  [N]      Generate New Procedural Track",
             "  [E]      Export Track to Gazebo 3D SDF",
             "  [R]      Reset Vehicle & Track",
