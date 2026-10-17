@@ -163,7 +163,7 @@ def run_video_detection(
     frames_processed = frame_idx // skip_frames
     avg_fps = frames_processed / elapsed if elapsed > 0 else 0
     
-    print(f"\nVideo processing complete.")
+    print("\nVideo processing complete.")
     print(f"  Total frames processed: {frames_processed}/{total_frames}")
     print(f"  Total detections: {total_detections}")
     print(f"  Speed: {avg_fps:.1f} fps")

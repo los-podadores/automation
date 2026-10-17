@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -14,9 +13,6 @@ from .config import (
     DEFAULT_WEIGHTS,
     IMAGE_SIZE,
     IOU_THRESHOLD,
-    NAVIGABLE_CLASSES,
-    ROD_CLASSES,
-    TRANSIT_OBSTACLE_CLASSES,
 )
 
 from .fusion_types import Detection

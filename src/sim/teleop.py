@@ -1,7 +1,13 @@
-"""Interactive pygame-based teleoperation and perception viewer for CarGazeboEnv."""
+"""Interactive pygame-based teleoperation and 360-degree perception viewer for CarGazeboEnv.
+
+Supports driving the large-scale non-holonomic Ackermann vehicle along procedurally
+generated corridors (A -> B -> A), viewing 360-degree LiDAR returns, and exporting
+worlds to 3D Gazebo Harmonic.
+"""
 
 from __future__ import annotations
 
+import argparse
 import math
 import sys
 from pathlib import Path
@@ -16,79 +22,92 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import numpy as np
-import pygame
+import numpy as np  # noqa: E402
+import pygame  # noqa: E402
 
-from src.sim.car_gazebo_env import CarGazeboEnv  # noqa: E402
+from src.sim.car_gazebo_env import (  # noqa: E402
+    CarGazeboEnv,
+)
+from src.translate.config import (  # noqa: E402
+    CAR_LENGTH,
+    CAR_WIDTH,
+    LIDAR_MAX_RANGE,
+    LIDAR_NUM_RAYS,
+    MAX_SPEED_MPS,
+    MIN_SPEED_MPS,
+    WHEELBASE,
+)
 from src.translate.fusion_types import (  # noqa: E402
     CLASS_FREE,
     CLASS_PEDESTRIAN,
-    CLASS_STATIC_HAZARD,
     CLASS_VEHICLE,
 )
 
 # Window Configuration
-WINDOW_W: Final[int] = 1200
-WINDOW_H: Final[int] = 800
-VIEW_W: Final[int] = 800
+WINDOW_W: Final[int] = 1280
+WINDOW_H: Final[int] = 840
+VIEW_W: Final[int] = 880
 PANEL_W: Final[int] = 400
 FPS: Final[int] = 30
 
 # Colors (Dark Modern Theme)
-BG_COLOR: Final[tuple[int, int, int]] = (20, 24, 30)
-PANEL_BG: Final[tuple[int, int, int]] = (28, 34, 44)
-ROAD_COLOR: Final[tuple[int, int, int]] = (40, 48, 60)
-LANE_COLOR: Final[tuple[int, int, int]] = (240, 200, 50)
-CURB_COLOR: Final[tuple[int, int, int]] = (180, 50, 50)
-GRID_COLOR: Final[tuple[int, int, int]] = (35, 42, 54)
+BG_COLOR: Final[tuple[int, int, int]] = (18, 22, 28)
+PANEL_BG: Final[tuple[int, int, int]] = (26, 32, 42)
+ROAD_COLOR: Final[tuple[int, int, int]] = (36, 44, 56)
+LANE_COLOR: Final[tuple[int, int, int]] = (230, 195, 45)
+WALL_COLOR: Final[tuple[int, int, int]] = (215, 55, 55)
+GRID_COLOR: Final[tuple[int, int, int]] = (30, 38, 48)
 TEXT_WHITE: Final[tuple[int, int, int]] = (240, 245, 250)
 TEXT_MUTED: Final[tuple[int, int, int]] = (140, 155, 175)
 TEXT_GREEN: Final[tuple[int, int, int]] = (70, 220, 120)
 TEXT_RED: Final[tuple[int, int, int]] = (240, 70, 70)
 TEXT_CYAN: Final[tuple[int, int, int]] = (60, 200, 240)
+TEXT_YELLOW: Final[tuple[int, int, int]] = (245, 200, 50)
 
 # Entity Colors
-CAR_BODY_COLOR: Final[tuple[int, int, int]] = (45, 160, 85)
-CAR_HOOD_COLOR: Final[tuple[int, int, int]] = (35, 130, 70)
-TIRE_COLOR: Final[tuple[int, int, int]] = (15, 15, 18)
+CAR_BODY_COLOR: Final[tuple[int, int, int]] = (235, 130, 30)  # Orange matching test drive footprint
+CAR_CABIN_COLOR: Final[tuple[int, int, int]] = (195, 100, 20)
+TIRE_COLOR: Final[tuple[int, int, int]] = (20, 20, 24)
 OBS_VEHICLE_COLOR: Final[tuple[int, int, int]] = (60, 140, 240)
 OBS_PED_COLOR: Final[tuple[int, int, int]] = (245, 170, 40)
 OBS_STATIC_COLOR: Final[tuple[int, int, int]] = (235, 75, 75)
 
 # Viewport parameters
-PIXELS_PER_METER: Final[float] = 16.0  # 1 meter = 16 pixels
+PIXELS_PER_METER: Final[float] = 14.0  # 1 meter = 14 pixels
 
 
 class CarTeleopApp:
-    """Interactive GUI application for controlling the autonomous car."""
+    """Interactive GUI application for controlling the autonomous car in 3D simulation."""
 
-    def __init__(self) -> None:
+    def __init__(self, backend: str = "sim") -> None:
         pygame.init()
-        pygame.display.set_caption("Los Podadores — Car Teleoperation & Perception Viewer")
+        pygame.display.set_caption("Los Podadores — Ackermann Car Teleop & 360° LiDAR")
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.clock = pygame.time.Clock()
+        self.backend = backend
 
-        self.font_title = pygame.font.SysFont("monospace", 18, bold=True)
-        self.font_body = pygame.font.SysFont("monospace", 14)
-        self.font_small = pygame.font.SysFont("monospace", 12)
+        self.font_title = pygame.font.SysFont("monospace", 17, bold=True)
+        self.font_body = pygame.font.SysFont("monospace", 13)
+        self.font_small = pygame.font.SysFont("monospace", 11)
 
-        self.env = CarGazeboEnv(num_obstacles=6)
-        self.obs, self.info = self.env.reset(seed=123)
+        self.env = CarGazeboEnv(num_obstacles=6, track_length=90.0, road_width=5.0)
+        self.obs, self.info = self.env.reset(seed=42)
 
         self.steer_action: float = 0.0
         self.throttle_action: float = 0.0
         self.paused: bool = False
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
+        self.status_msg: str = "Initialized. Drive with WASD / Arrows."
+        self.status_timer: int = 60
 
-    def world_to_screen(self, wx: float, wy: float, car_x: float) -> tuple[int, int]:
-        """Convert world coordinates (meters) to screen pixel coordinates."""
-        # Camera tracks vehicle along X with forward offset
-        cam_x = car_x - 4.0
-        screen_x = int((wx - cam_x) * PIXELS_PER_METER + 50)
-        # Y is lateral: +Y left, so screen_y is inverted
-        screen_y = int((WINDOW_H / 2.0) - (wy * PIXELS_PER_METER))
-        return screen_x, screen_y
+    def world_to_screen(self, wx: float, wy: float, car_x: float, car_y: float) -> tuple[int, int]:
+        """Convert world coordinates (meters) to screen pixel coordinates centered on car."""
+        cx = VIEW_W / 2.0
+        cy = WINDOW_H / 2.0
+        sx = int(cx + (wx - car_x) * PIXELS_PER_METER)
+        sy = int(cy - (wy - car_y) * PIXELS_PER_METER)
+        return sx, sy
 
     def handle_input(self) -> bool:
         """Read keyboard state and update teleop action commands."""
@@ -102,340 +121,354 @@ class CarTeleopApp:
                     self.obs, self.info = self.env.reset()
                     self.total_reward = 0.0
                     self.trail.clear()
+                    self.status_msg = "Reset vehicle and track."
+                    self.status_timer = 45
                 if event.key == pygame.K_p:
                     self.paused = not self.paused
+                if event.key == pygame.K_n:
+                    self.obs, self.info = self.env.reset()
+                    self.trail.clear()
+                    self.status_msg = "Generated new procedural track!"
+                    self.status_timer = 60
+                if event.key == pygame.K_e:
+                    export_p = PROJECT_ROOT / "src" / "v2" / "model" / "procedural_track.sdf"
+                    if self.env.track:
+                        self.env.track.export_gazebo_sdf(export_p)
+                        self.status_msg = f"Exported Gazebo SDF: {export_p.name}"
+                        self.status_timer = 90
+                if event.key == pygame.K_TAB:
+                    # Manually cycle mission phase
+                    self.env.mission_phase = (self.env.mission_phase + 1) % 3
+                    phase_name = ["A -> B", "REMOTE HOLD", "B -> A"][self.env.mission_phase]
+                    self.status_msg = f"Switched mission phase: {phase_name}"
+                    self.status_timer = 60
 
         keys = pygame.key.get_pressed()
 
         # Steering: Left/Right
         target_steer = 0.0
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            target_steer = 1.0  # positive steering turns left (+Y)
+            target_steer = 1.0  # Turn Left (+steer)
         elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            target_steer = -1.0  # negative steering turns right (-Y)
+            target_steer = -1.0  # Turn Right (-steer)
 
-        # Smooth steering transition
-        self.steer_action += (target_steer - self.steer_action) * 0.25
+        self.steer_action += (target_steer - self.steer_action) * 0.28
 
-        # Throttle/Brake: Up/Down
+        # Throttle/Brake/Reverse: Up/Down
         target_throttle = 0.0
         if keys[pygame.K_UP] or keys[pygame.K_w]:
-            target_throttle = 1.0
+            target_throttle = 1.0  # Forward throttle
         elif keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            target_throttle = -1.0
+            target_throttle = -1.0  # Reverse / Braking
         elif keys[pygame.K_SPACE]:
             target_throttle = -1.0
-            target_steer = 0.0
+            self.steer_action = 0.0
 
-        # Smooth throttle transition
-        self.throttle_action += (target_throttle - self.throttle_action) * 0.30
-
+        self.throttle_action += (target_throttle - self.throttle_action) * 0.35
         return True
 
     def draw_world(self) -> None:
-        """Render road, obstacles, vehicle, and perception rays on the left panel."""
+        """Render procedural road, red walls, obstacles, vehicle, and 360-degree LiDAR."""
         view_rect = pygame.Rect(0, 0, VIEW_W, WINDOW_H)
         pygame.draw.rect(self.screen, BG_COLOR, view_rect)
 
-        car_x = self.env.car_x
-        car_y = self.env.car_y
-        car_yaw = self.env.car_yaw
+        car_x, car_y, car_yaw = self.env.car_x, self.env.car_y, self.env.car_yaw
 
-        # 1. Draw Road and Lane Boundaries
-        road_half_w = 4.0  # 4 meters each side
-        top_left = self.world_to_screen(car_x - 10.0, road_half_w, car_x)
-        bot_right = self.world_to_screen(car_x + 50.0, -road_half_w, car_x)
-        road_h = abs(bot_right[1] - top_left[1])
-        pygame.draw.rect(self.screen, ROAD_COLOR, (0, top_left[1], VIEW_W, road_h))
+        # 1. Background Grid
+        grid_m = 5.0
+        min_gx = int((car_x - 40.0) / grid_m) * int(grid_m)
+        max_gx = int((car_x + 40.0) / grid_m) * int(grid_m)
+        min_gy = int((car_y - 30.0) / grid_m) * int(grid_m)
+        max_gy = int((car_y + 30.0) / grid_m) * int(grid_m)
 
-        # Lane markings (dashed center line)
-        dash_len_m = 2.0
-        gap_len_m = 2.0
-        curr_x = math.floor((car_x - 10.0) / 4.0) * 4.0
-        while curr_x < car_x + 50.0:
-            p1 = self.world_to_screen(curr_x, 0.0, car_x)
-            p2 = self.world_to_screen(curr_x + dash_len_m, 0.0, car_x)
-            if 0 <= p1[0] <= VIEW_W or 0 <= p2[0] <= VIEW_W:
-                pygame.draw.line(self.screen, LANE_COLOR, p1, p2, 2)
-            curr_x += dash_len_m + gap_len_m
+        for gx in range(min_gx, max_gx + int(grid_m), int(grid_m)):
+            p1 = self.world_to_screen(float(gx), float(min_gy), car_x, car_y)
+            p2 = self.world_to_screen(float(gx), float(max_gy), car_x, car_y)
+            pygame.draw.line(self.screen, GRID_COLOR, p1, p2, 1)
 
-        # Curbs
-        p_c1_a = self.world_to_screen(car_x - 10.0, road_half_w, car_x)
-        p_c1_b = self.world_to_screen(car_x + 50.0, road_half_w, car_x)
-        pygame.draw.line(self.screen, CURB_COLOR, p_c1_a, p_c1_b, 4)
+        for gy in range(min_gy, max_gy + int(grid_m), int(grid_m)):
+            p1 = self.world_to_screen(float(min_gx), float(gy), car_x, car_y)
+            p2 = self.world_to_screen(float(max_gx), float(gy), car_x, car_y)
+            pygame.draw.line(self.screen, GRID_COLOR, p1, p2, 1)
 
-        p_c2_a = self.world_to_screen(car_x - 10.0, -road_half_w, car_x)
-        p_c2_b = self.world_to_screen(car_x + 50.0, -road_half_w, car_x)
-        pygame.draw.line(self.screen, CURB_COLOR, p_c2_a, p_c2_b, 4)
+        # 2. Draw Active Waypoint Path
+        if self.env.track:
+            wps = self.env._get_active_waypoints()
+            if len(wps) > 1:
+                pts = [self.world_to_screen(wp[0], wp[1], car_x, car_y) for wp in wps]
+                pygame.draw.lines(self.screen, (55, 70, 90), False, pts, 4)
 
-        # 2. Draw 72 Radial Perception Rays (Observed by the Policy)
-        num_rays = 72
-        dist_slice = self.obs[10 : 10 + num_rays]
-        cls_slice = self.obs[10 + num_rays : 10 + 2 * num_rays]
-        ray_angles = np.linspace(-math.pi / 2.0, math.pi / 2.0, num_rays)
-        car_pos_px = self.world_to_screen(car_x, car_y, car_x)
+            # Draw Point A (Start) and Point B (Goal) beacons
+            ax, ay, _ = self.env.track.start_pose
+            bx, by, _ = self.env.track.goal_pose
+            ap = self.world_to_screen(ax, ay, car_x, car_y)
+            bp = self.world_to_screen(bx, by, car_x, car_y)
+            pygame.draw.circle(self.screen, (40, 200, 90), ap, 10)
+            pygame.draw.circle(self.screen, (30, 140, 240), bp, 10)
+            self.screen.blit(self.font_small.render("Point A", True, TEXT_WHITE), (ap[0] + 12, ap[1] - 8))
+            self.screen.blit(self.font_small.render("Point B", True, TEXT_WHITE), (bp[0] + 12, bp[1] - 8))
 
-        for i in range(0, num_rays, 2):  # Draw every 2nd ray to keep view clean
-            ang_world = car_yaw + ray_angles[i]
-            r_m = float(dist_slice[i]) * 25.0
-            ray_end_w = (car_x + r_m * math.cos(ang_world), car_y + r_m * math.sin(ang_world))
-            ray_end_px = self.world_to_screen(ray_end_w[0], ray_end_w[1], car_x)
+        # 3. Draw Flanking Red Walls
+        if self.env.track:
+            for (wx1, wy1), (wx2, wy2) in self.env.track.wall_segments:
+                p1 = self.world_to_screen(wx1, wy1, car_x, car_y)
+                p2 = self.world_to_screen(wx2, wy2, car_x, car_y)
+                pygame.draw.line(self.screen, WALL_COLOR, p1, p2, 5)
 
-            cls_code = int(cls_slice[i])
-            if cls_code == CLASS_FREE:
-                r_color = (60, 75, 95)
-            elif cls_code == CLASS_VEHICLE:
-                r_color = (80, 160, 240)
-            elif cls_code == CLASS_PEDESTRIAN:
-                r_color = (240, 180, 50)
-            else:
-                r_color = (240, 80, 80)
-
-            pygame.draw.line(self.screen, r_color, car_pos_px, ray_end_px, 1)
-
-        # 3. Draw Trajectory Trail
+        # 4. Draw Vehicle Breadcrumb Trail
         self.trail.append((car_x, car_y))
-        if len(self.trail) > 150:
+        if len(self.trail) > 400:
             self.trail.pop(0)
-        if len(self.trail) >= 2:
-            trail_pts = [self.world_to_screen(tx, ty, car_x) for tx, ty in self.trail]
-            pygame.draw.lines(self.screen, (70, 160, 100), False, trail_pts, 2)
+        if len(self.trail) > 1:
+            trail_pts = [self.world_to_screen(tx, ty, car_x, car_y) for tx, ty in self.trail]
+            pygame.draw.lines(self.screen, (60, 130, 90), False, trail_pts, 2)
 
-        # 4. Draw Simulated Obstacles
-        for ent in self.env.entities:
-            epx, epy = self.world_to_screen(ent.world_x, ent.world_y, car_x)
-            r_px = max(4, int(ent.radius * PIXELS_PER_METER))
+        # 5. Draw 360-degree LiDAR Radar Rays
+        # Observation layout: distances are [12:84], classes are [84:156]
+        norm_dists = self.obs[12:84]
+        hit_classes = self.obs[84:156]
+        ray_angles = np.linspace(-math.pi, math.pi, LIDAR_NUM_RAYS, endpoint=False)
 
-            if ent.class_name in ("Car", "Bus"):
+        car_screen = self.world_to_screen(car_x, car_y, car_x, car_y)
+        for i in range(LIDAR_NUM_RAYS):
+            r_dist = float(norm_dists[i]) * LIDAR_MAX_RANGE
+            r_ang = float(ray_angles[i]) + car_yaw
+            end_wx = car_x + r_dist * math.cos(r_ang)
+            end_wy = car_y + r_dist * math.sin(r_ang)
+            end_screen = self.world_to_screen(end_wx, end_wy, car_x, car_y)
+
+            h_cls = int(hit_classes[i])
+            if h_cls == CLASS_FREE:
+                color = (35, 60, 50)
+            elif h_cls == CLASS_VEHICLE:
                 color = OBS_VEHICLE_COLOR
-                # Draw vehicle box
-                w_px = int(ent.radius * 2.0 * PIXELS_PER_METER)
-                h_px = int(ent.radius * 1.2 * PIXELS_PER_METER)
-                pygame.draw.rect(
-                    self.screen,
-                    color,
-                    (epx - w_px // 2, epy - h_px // 2, w_px, h_px),
-                    border_radius=4,
-                )
-            elif ent.class_name == "Person":
+            elif h_cls == CLASS_PEDESTRIAN:
                 color = OBS_PED_COLOR
-                pygame.draw.circle(self.screen, color, (epx, epy), r_px)
             else:
-                color = OBS_STATIC_COLOR
-                pygame.draw.circle(self.screen, color, (epx, epy), r_px)
+                color = WALL_COLOR
 
-            # Label
-            lbl = self.font_small.render(ent.class_name, True, TEXT_MUTED)
-            self.screen.blit(lbl, (epx - lbl.get_width() // 2, epy - r_px - 14))
+            pygame.draw.line(self.screen, color, car_screen, end_screen, 1)
 
-        # 5. Draw Ego Tractor Vehicle
-        self._draw_tractor(car_x, car_y, car_yaw)
+        # 6. Draw Obstacles
+        if self.env.track:
+            for obs in self.env.track.obstacles:
+                op = self.world_to_screen(obs.world_x, obs.world_y, car_x, car_y)
+                r_px = max(4, int(obs.radius * PIXELS_PER_METER))
+                c = OBS_VEHICLE_COLOR if obs.class_name == "Car" else OBS_PED_COLOR if obs.class_name == "Person" else OBS_STATIC_COLOR
+                pygame.draw.circle(self.screen, c, op, r_px)
+                pygame.draw.circle(self.screen, TEXT_WHITE, op, r_px, 1)
 
-    def _draw_tractor(self, cx: float, cy: float, yaw: float) -> None:
-        """Render the tractor with articulated front steering wheels."""
-        c_px, c_py = self.world_to_screen(cx, cy, cx)
+        # 7. Draw Scaled Vehicle (3.8m length, 1.9m width, Ackermann wheels)
+        self._draw_vehicle(car_x, car_y, car_yaw, self.env.car_steer)
 
-        # Chassis oriented polygon
-        cos_y = math.cos(yaw)
-        sin_y = math.sin(yaw)
+    def _draw_vehicle(self, car_x: float, car_y: float, car_yaw: float, steer: float) -> None:
+        """Render the 3.8m car body and steerable front wheels."""
+        cos_y = math.cos(car_yaw)
+        sin_y = math.sin(car_yaw)
 
-        def rot(dx: float, dy: float) -> tuple[int, int]:
-            # dy is lateral (+left), so invert for screen coordinates
-            sx = c_px + int((dx * cos_y - dy * sin_y) * PIXELS_PER_METER)
-            sy = c_py - int((dx * sin_y + dy * cos_y) * PIXELS_PER_METER)
-            return sx, sy
-
-        # Chassis Box
+        # 4 corners of the car body in ego frame (+X forward, +Y left)
+        hl = CAR_LENGTH / 2.0  # 1.90m
+        hw = CAR_WIDTH / 2.0   # 0.95m
         corners = [
-            rot(0.54, 0.28),
-            rot(0.54, -0.28),
-            rot(-0.54, -0.28),
-            rot(-0.54, 0.28),
+            (+hl, +hw),
+            (+hl, -hw),
+            (-hl, -hw),
+            (-hl, +hw),
         ]
-        pygame.draw.polygon(self.screen, CAR_BODY_COLOR, corners)
-        pygame.draw.polygon(self.screen, TEXT_WHITE, corners, 1)
 
-        # Hood accent
-        hood = [
-            rot(0.54, 0.18),
-            rot(0.54, -0.18),
-            rot(0.10, -0.20),
-            rot(0.10, 0.20),
+        screen_corners: list[tuple[int, int]] = []
+        for ex, ey in corners:
+            wx = car_x + ex * cos_y - ey * sin_y
+            wy = car_y + ex * sin_y + ey * cos_y
+            screen_corners.append(self.world_to_screen(wx, wy, car_x, car_y))
+
+        pygame.draw.polygon(self.screen, CAR_BODY_COLOR, screen_corners)
+        pygame.draw.polygon(self.screen, (255, 170, 70), screen_corners, 2)
+
+        # Draw Cabin / Hood contrast
+        hood_front = [
+            (+hl * 0.9, +hw * 0.7),
+            (+hl * 0.9, -hw * 0.7),
+            (+0.2, -hw * 0.7),
+            (+0.2, +hw * 0.7),
         ]
-        pygame.draw.polygon(self.screen, CAR_HOOD_COLOR, hood)
+        hood_pts = []
+        for ex, ey in hood_front:
+            wx = car_x + ex * cos_y - ey * sin_y
+            wy = car_y + ex * sin_y + ey * cos_y
+            hood_pts.append(self.world_to_screen(wx, wy, car_x, car_y))
+        pygame.draw.polygon(self.screen, CAR_CABIN_COLOR, hood_pts)
 
-        # Rear drive wheels (Fixed orientation to chassis)
-        wheel_w_rear = 0.25
-        wheel_l_rear = 0.50
-        for side_y in (0.32, -0.32):
+        # Draw 4 Wheels
+        wheel_l = 0.76  # 2 * 0.38m radius
+        wheel_w = 0.28
+        axle_f = WHEELBASE / 2.0   # +1.25m
+        axle_r = -WHEELBASE / 2.0  # -1.25m
+        track_h = 0.80             # +/- 0.80m
+
+        wheel_configs = [
+            (axle_f, +track_h, steer),   # Front Left (Steerable)
+            (axle_f, -track_h, steer),   # Front Right (Steerable)
+            (axle_r, +track_h, 0.0),     # Rear Left (Fixed)
+            (axle_r, -track_h, 0.0),     # Rear Right (Fixed)
+        ]
+
+        for wx_ego, wy_ego, w_steer in wheel_configs:
+            total_steer = car_yaw + w_steer
+            cos_w = math.cos(total_steer)
+            sin_w = math.sin(total_steer)
+
+            # Center of wheel in world
+            wc_x = car_x + wx_ego * cos_y - wy_ego * sin_y
+            wc_y = car_y + wx_ego * sin_y + wy_ego * cos_y
+
             w_pts = [
-                rot(-0.40 + wheel_l_rear / 2.0, side_y + wheel_w_rear / 2.0),
-                rot(-0.40 + wheel_l_rear / 2.0, side_y - wheel_w_rear / 2.0),
-                rot(-0.40 - wheel_l_rear / 2.0, side_y - wheel_w_rear / 2.0),
-                rot(-0.40 - wheel_l_rear / 2.0, side_y + wheel_w_rear / 2.0),
+                (+wheel_l / 2, +wheel_w / 2),
+                (+wheel_l / 2, -wheel_w / 2),
+                (-wheel_l / 2, -wheel_w / 2),
+                (-wheel_l / 2, +wheel_w / 2),
             ]
-            pygame.draw.polygon(self.screen, TIRE_COLOR, w_pts)
+            scr_w_pts = []
+            for px, py in w_pts:
+                p_wx = wc_x + px * cos_w - py * sin_w
+                p_wy = wc_y + px * sin_w + py * cos_w
+                scr_w_pts.append(self.world_to_screen(p_wx, p_wy, car_x, car_y))
 
-        # Front steering wheels (Articulated by steer angle delta)
-        steer = self.env.car_steer
-        steer_yaw = yaw + steer
-        cos_s = math.cos(steer_yaw)
-        sin_s = math.sin(steer_yaw)
-        wheel_w_front = 0.16
-        wheel_l_front = 0.37
+            pygame.draw.polygon(self.screen, TIRE_COLOR, scr_w_pts)
+            pygame.draw.polygon(self.screen, (80, 80, 90), scr_w_pts, 1)
 
-        for side_y in (0.30, -0.30):
-            hub_px, hub_py = rot(0.40, side_y)
-
-            def rot_wheel(lx: float, ly: float) -> tuple[int, int]:
-                wx = hub_px + int((lx * cos_s - ly * sin_s) * PIXELS_PER_METER)
-                wy = hub_py - int((lx * sin_s + ly * cos_s) * PIXELS_PER_METER)
-                return wx, wy
-
-            fw_pts = [
-                rot_wheel(wheel_l_front / 2.0, wheel_w_front / 2.0),
-                rot_wheel(wheel_l_front / 2.0, -wheel_w_front / 2.0),
-                rot_wheel(-wheel_l_front / 2.0, -wheel_w_front / 2.0),
-                rot_wheel(-wheel_l_front / 2.0, wheel_w_front / 2.0),
-            ]
-            pygame.draw.polygon(self.screen, TIRE_COLOR, fw_pts)
-
-        # 3 Forward-Biased Sensor Pods (Option B)
-        # Pod 0: Center (Yellow)
-        pygame.draw.circle(self.screen, (240, 220, 50), rot(0.55, 0.0), 4)
-        # Pod 1: Left +45° (Cyan)
-        pygame.draw.circle(self.screen, (60, 220, 240), rot(0.45, 0.30), 4)
-        # Pod 2: Right -45° (Cyan)
-        pygame.draw.circle(self.screen, (60, 220, 240), rot(0.45, -0.30), 4)
+        # Draw 4 Sensor Pod Indicators
+        pod_offsets = [
+            (+1.90, 0.0, (50, 220, 100)),    # Front
+            (-1.90, 0.0, (220, 50, 50)),     # Rear
+            (+1.00, -0.95, (50, 180, 240)),  # Right
+            (+1.00, +0.95, (50, 180, 240)),  # Left
+        ]
+        for px, py, col in pod_offsets:
+            p_wx = car_x + px * cos_y - py * sin_y
+            p_wy = car_y + px * sin_y + py * cos_y
+            p_scr = self.world_to_screen(p_wx, p_wy, car_x, car_y)
+            pygame.draw.circle(self.screen, col, p_scr, 4)
 
     def draw_hud(self) -> None:
-        """Render live telemetry, gauges, and perception HUD on the right panel."""
+        """Render side panel with instrumentation, 360-degree radar minimap, and controls."""
         panel_rect = pygame.Rect(VIEW_W, 0, PANEL_W, WINDOW_H)
         pygame.draw.rect(self.screen, PANEL_BG, panel_rect)
-        pygame.draw.line(self.screen, GRID_COLOR, (VIEW_W, 0), (VIEW_W, WINDOW_H), 2)
+        pygame.draw.line(self.screen, (50, 60, 75), (VIEW_W, 0), (VIEW_W, WINDOW_H), 2)
 
-        x_pad = VIEW_W + 20
+        x = VIEW_W + 24
         y = 20
 
-        # Title
-        title = self.font_title.render("TELEMETRY & SENSORS", True, TEXT_WHITE)
-        self.screen.blit(title, (x_pad, y))
+        # Title & Backend
+        title = self.font_title.render("AUTONOMOUS CAR TELEOP", True, TEXT_CYAN)
+        self.screen.blit(title, (x, y))
+        y += 24
+
+        backend_lbl = self.font_small.render(f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN", True, TEXT_MUTED)
+        self.screen.blit(backend_lbl, (x, y))
+        y += 30
+
+        # Mission Phase Header
+        phase_idx = self.env.mission_phase
+        phase_names = ["PHASE 0: NAV A -> B", "PHASE 1: REMOTE HOLD (POINT B)", "PHASE 2: NAV B -> A"]
+        phase_colors = [TEXT_GREEN, TEXT_YELLOW, TEXT_CYAN]
+        phase_text = self.font_body.render(phase_names[phase_idx], True, phase_colors[phase_idx])
+        pygame.draw.rect(self.screen, (35, 45, 60), (x - 6, y - 4, PANEL_W - 36, 26), border_radius=4)
+        self.screen.blit(phase_text, (x, y))
+        y += 36
+
+        # Telemetry Gauges
+        speed = self.env.car_vx
+        steer_deg = math.degrees(self.env.car_steer)
+        goal_dist = self.info.get("dist_to_goal", 0.0)
+
+        self._draw_gauge("SPEED (m/s):", speed, MIN_SPEED_MPS, MAX_SPEED_MPS, x, y, TEXT_GREEN if speed >= 0 else TEXT_YELLOW)
+        y += 50
+        self._draw_gauge("STEER (deg):", steer_deg, -32.0, 32.0, x, y, TEXT_CYAN)
+        y += 50
+
+        # Metrics Table
+        metrics = [
+            f"Distance to Target: {goal_dist:5.1f} m",
+            f"Heading:            {math.degrees(self.env.car_yaw):+5.1f}°",
+            f"Yaw Rate:           {math.degrees(self.env.car_yaw_rate):+5.1f}°/s",
+            f"Collision Status:   {'COLLISION!' if self.info.get('collision') else 'CLEAR'}",
+            f"Simulation Steps:   {self.env.step_count:d}",
+        ]
+        for m in metrics:
+            color = TEXT_RED if "COLLISION!" in m else TEXT_WHITE
+            lbl = self.font_body.render(m, True, color)
+            self.screen.blit(lbl, (x, y))
+            y += 22
+        y += 10
+
+        # 360-Degree Surround Radar Minimap
+        radar_cx = x + (PANEL_W - 48) // 2
+        radar_cy = y + 75
+        radar_rad = 65
+        pygame.draw.circle(self.screen, (15, 20, 26), (radar_cx, radar_cy), radar_rad)
+        pygame.draw.circle(self.screen, (40, 50, 65), (radar_cx, radar_cy), radar_rad, 1)
+        pygame.draw.circle(self.screen, (30, 40, 52), (radar_cx, radar_cy), radar_rad // 2, 1)
+        pygame.draw.line(self.screen, (45, 55, 70), (radar_cx - radar_rad, radar_cy), (radar_cx + radar_rad, radar_cy), 1)
+        pygame.draw.line(self.screen, (45, 55, 70), (radar_cx, radar_cy - radar_rad), (radar_cx, radar_cy + radar_rad), 1)
+
+        # Draw car icon in center of radar
+        pygame.draw.rect(self.screen, CAR_BODY_COLOR, (radar_cx - 4, radar_cy - 8, 8, 16), border_radius=2)
+
+        # Plot 360-degree LiDAR returns on radar
+        norm_dists = self.obs[12:84]
+        hit_classes = self.obs[84:156]
+        ray_angles = np.linspace(-math.pi, math.pi, LIDAR_NUM_RAYS, endpoint=False)
+        for i in range(LIDAR_NUM_RAYS):
+            d_ratio = float(norm_dists[i])
+            if d_ratio < 0.98:
+                ang = float(ray_angles[i]) - math.pi / 2.0  # +X forward is up on radar
+                rx = radar_cx + int(d_ratio * radar_rad * math.cos(ang))
+                ry = radar_cy + int(d_ratio * radar_rad * math.sin(ang))
+                h_cls = int(hit_classes[i])
+                col = OBS_VEHICLE_COLOR if h_cls == CLASS_VEHICLE else OBS_PED_COLOR if h_cls == CLASS_PEDESTRIAN else WALL_COLOR
+                pygame.draw.circle(self.screen, col, (rx, ry), 2)
+
+        radar_lbl = self.font_small.render("360° LIDAR (15m)", True, TEXT_MUTED)
+        self.screen.blit(radar_lbl, (radar_cx - 45, radar_cy + radar_rad + 6))
+        y += 170
+
+        # Status Message Banner
+        if self.status_timer > 0:
+            self.status_timer -= 1
+            msg_box = pygame.Rect(x - 6, y, PANEL_W - 36, 26)
+            pygame.draw.rect(self.screen, (25, 40, 35), msg_box, border_radius=4)
+            self.screen.blit(self.font_small.render(self.status_msg, True, TEXT_GREEN), (x, y + 5))
         y += 35
 
-        # Vehicle Kinematics
-        speed_kmh = self.env.car_vx * 3.6
-        steer_deg = math.degrees(self.env.car_steer)
-        lat_err = self.env.car_y
-
-        stats = [
-            ("Speed:", f"{self.env.car_vx:4.2f} m/s ({speed_kmh:4.1f} km/h)", TEXT_CYAN),
-            ("Steer Angle:", f"{steer_deg:+5.1f}°", TEXT_GREEN if abs(steer_deg) < 15 else TEXT_RED),
-            ("Yaw Rate:", f"{self.env.car_yaw_rate:+5.2f} rad/s", TEXT_WHITE),
-            ("Acceleration:", f"{self.env.car_ax:+5.2f} m/s²", TEXT_WHITE),
-            ("Lateral Error:", f"{lat_err:+5.2f} m", TEXT_GREEN if abs(lat_err) < 1.0 else TEXT_RED),
-            ("Heading Error:", f"{math.degrees(self.env.car_yaw):+5.1f}°", TEXT_WHITE),
-            ("Episode Reward:", f"{self.total_reward:+6.1f}", TEXT_GREEN if self.total_reward > 0 else TEXT_RED),
-            ("Step Count:", f"{self.env.step_count:4d} / 500", TEXT_WHITE),
+        # Controls Guide
+        controls = [
+            "KEYBOARD CONTROLS:",
+            "  [W / ↑]  Accelerate (0 -> 3.0 m/s)",
+            "  [S / ↓]  Brake / Reverse (down to -1.2)",
+            "  [A / D]  Steer Left / Right (Ackermann)",
+            "  [Space]  Handbrake (instant stop)",
+            "  [Tab]    Cycle Phase (A->B, Hold, B->A)",
+            "  [N]      Generate New Procedural Track",
+            "  [E]      Export Track to Gazebo 3D SDF",
+            "  [R]      Reset Vehicle & Track",
+            "  [P]      Pause Simulation",
+            "  [Esc]    Quit",
         ]
-
-        for label, val, color in stats:
-            lbl_surf = self.font_body.render(f"{label:<16}", True, TEXT_MUTED)
-            val_surf = self.font_body.render(val, True, color)
-            self.screen.blit(lbl_surf, (x_pad, y))
-            self.screen.blit(val_surf, (x_pad + 150, y))
-            y += 24
-
-        y += 15
-        pygame.draw.line(self.screen, GRID_COLOR, (x_pad, y), (WINDOW_W - 20, y), 1)
-        y += 15
-
-        # Action Gauges
-        gauge_lbl = self.font_title.render("ACTIVE CONTROLS", True, TEXT_WHITE)
-        self.screen.blit(gauge_lbl, (x_pad, y))
-        y += 30
-
-        # Steering bar (-1 to +1)
-        self._draw_bar(x_pad, y, "Steering (A / D):", self.steer_action, -1.0, 1.0, (80, 180, 240))
-        y += 50
-        # Throttle/Brake bar (-1 to +1)
-        self._draw_bar(x_pad, y, "Throttle (W / S):", self.throttle_action, -1.0, 1.0, (80, 220, 120))
-        y += 65
-
-        pygame.draw.line(self.screen, GRID_COLOR, (x_pad, y), (WINDOW_W - 20, y), 1)
-        y += 15
-
-        # Perception Mini-Radar View
-        radar_title = self.font_title.render("POLAR PERCEPTION SCAN", True, TEXT_WHITE)
-        self.screen.blit(radar_title, (x_pad, y))
-        y += 30
-
-        radar_cx = x_pad + 180
-        radar_cy = y + 100
-        radar_r = 80
-
-        # Draw radar arc
-        pygame.draw.arc(
-            self.screen,
-            GRID_COLOR,
-            (radar_cx - radar_r, radar_cy - radar_r, radar_r * 2, radar_r * 2),
-            0,
-            math.pi,
-            2,
-        )
-        pygame.draw.line(self.screen, GRID_COLOR, (radar_cx - radar_r, radar_cy), (radar_cx + radar_r, radar_cy), 1)
-        pygame.draw.line(self.screen, GRID_COLOR, (radar_cx, radar_cy), (radar_cx, radar_cy - radar_r), 1)
-
-        # Plot 72 rays on radar
-        num_rays = 72
-        dist_slice = self.obs[10 : 10 + num_rays]
-        cls_slice = self.obs[10 + num_rays : 10 + 2 * num_rays]
-        angles = np.linspace(-math.pi / 2.0, math.pi / 2.0, num_rays)
-
-        for i in range(num_rays):
-            r_norm = float(dist_slice[i])
-            if r_norm < 0.98:
-                ang = angles[i] + math.pi / 2.0
-                px = radar_cx + int(r_norm * radar_r * math.cos(ang))
-                py = radar_cy - int(r_norm * radar_r * math.sin(ang))
-                cls_c = int(cls_slice[i])
-                if cls_c == CLASS_VEHICLE:
-                    c = OBS_VEHICLE_COLOR
-                elif cls_c == CLASS_PEDESTRIAN:
-                    c = OBS_PED_COLOR
-                elif cls_c == CLASS_STATIC_HAZARD:
-                    c = OBS_STATIC_COLOR
-                else:
-                    c = TEXT_MUTED
-                pygame.draw.circle(self.screen, c, (px, py), 3)
-
-        # Draw vehicle icon at radar origin
-        pygame.draw.circle(self.screen, (240, 240, 240), (radar_cx, radar_cy), 5)
-        y += 190
-
-        # Help Instructions
-        help_lines = [
-            "[W / UP]    Throttle forward",
-            "[S / DOWN]  Brake / Reverse",
-            "[A / LEFT]  Steer Left",
-            "[D / RIGHT] Steer Right",
-            "[SPACE]     Handbrake",
-            "[R]         Reset environment",
-            "[P]         Pause simulation",
-            "[Q / ESC]   Quit",
-        ]
-        for line in help_lines:
-            txt = self.font_small.render(line, True, TEXT_MUTED)
-            self.screen.blit(txt, (x_pad, y))
+        for c in controls:
+            color = TEXT_YELLOW if "KEYBOARD" in c else TEXT_MUTED
+            lbl = self.font_small.render(c, True, color)
+            self.screen.blit(lbl, (x, y))
             y += 18
 
-    def _draw_bar(
+    def _draw_gauge(
         self,
-        x: int,
-        y: int,
         label: str,
         val: float,
         min_v: float,
         max_v: float,
+        x: int,
+        y: int,
         color: tuple[int, int, int],
     ) -> None:
         """Draw an analog gauge bar with center zero."""
@@ -483,7 +516,11 @@ class CarTeleopApp:
 
 
 def main() -> None:
-    app = CarTeleopApp()
+    parser = argparse.ArgumentParser(description="Car Teleop & 360 perception viewer")
+    parser.add_argument("--backend", choices=["sim", "gazebo"], default="sim", help="Backend simulation engine")
+    args = parser.parse_args()
+
+    app = CarTeleopApp(backend=args.backend)
     app.run()
 
 

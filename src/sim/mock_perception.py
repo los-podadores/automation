@@ -12,9 +12,10 @@ from typing import Final
 
 import numpy as np
 
+from src.translate.config import LIDAR_MAX_RANGE
 from src.translate.fusion_types import TrackedObstacle
 
-MAX_PERCEPTION_RANGE: Final[float] = 25.0
+MAX_PERCEPTION_RANGE: Final[float] = LIDAR_MAX_RANGE
 
 
 @dataclass
@@ -76,18 +77,11 @@ class MockPerceptionEngine:
             ego_x = dx_w * cos_yaw - dy_w * sin_yaw
             ego_y = dx_w * sin_yaw + dy_w * cos_yaw
 
-            # 2. Check forward coverage: Only objects in front (Option B covers -90 to +90 deg)
-            if ego_x <= 0.2:
-                continue
-
+            # 2. Check 360-degree surround range (all directions covered by 4 pods)
             dist = math.hypot(ego_x, ego_y)
             if dist > MAX_PERCEPTION_RANGE:
                 continue
 
-            # Check if within total sensor horizontal FOV (-95 deg to +95 deg)
-            azimuth = math.atan2(ego_y, ego_x)
-            if abs(azimuth) > math.radians(95.0):
-                continue
 
             # 3. Apply realistic dropout (occasional occlusion or missed detection)
             if self.rng.random() < self.dropout_probability:

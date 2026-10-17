@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+import numpy as np
+
 from .config import NAVIGABLE_CLASSES, TRANSIT_OBSTACLE_CLASSES
 
 # Standardized class IDs for RL spatial map encoding
@@ -94,3 +96,32 @@ class PodExtrinsics:
     lidar_to_cam_tx: float  # Translation X from LiDAR to camera (meters)
     lidar_to_cam_ty: float  # Translation Y from LiDAR to camera (meters)
     lidar_to_cam_tz: float  # Translation Z from LiDAR to camera (meters)
+
+
+@dataclass(frozen=True)
+class GoalState:
+    """Represents the relative target goal state and mission progress."""
+
+    dx_ego: float  # Longitudinal distance to current target (meters ahead)
+    dy_ego: float  # Lateral distance to current target (meters left/right)
+    distance: float  # Euclidean distance to target (meters)
+    heading_error: float  # Angular error to target in ego frame (radians, -pi to +pi)
+    cross_track_error: float  # Lateral distance from nominal trajectory (meters)
+    path_heading_error: float  # Angular deviation from nominal trajectory tangent (radians)
+    phase: int  # 0: A -> B, 1: Remote Hold, 2: B -> A
+
+    def to_array(self) -> np.ndarray:
+        import numpy as np
+
+        return np.array(
+            [
+                self.dx_ego,
+                self.dy_ego,
+                self.distance,
+                self.heading_error,
+                self.cross_track_error,
+                self.path_heading_error,
+            ],
+            dtype=np.float32,
+        )
+

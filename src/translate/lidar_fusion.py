@@ -16,18 +16,19 @@ from .fusion_types import Detection, PodExtrinsics, TrackedObstacle
 if TYPE_CHECKING:
     from .detect import ObstacleDetector
 
-# Default pod extrinsics configuration for Option B (tractor geometry)
-# Pod 0: Front-Center (0 deg heading offset, x=+0.55m, y=0.0m)
-# Pod 1: Front-Left (+45 deg heading offset, x=+0.45m, y=+0.30m)
-# Pod 2: Front-Right (-45 deg heading offset, x=+0.45m, y=-0.30m)
+# Default pod extrinsics configuration for 4-pod surround array (Large-Scale Utility Car)
+# Pod 0: Front-Center (0 deg heading offset, x=+1.90m, y=0.0m)
+# Pod 1: Rear-Center (180 deg heading offset, x=-1.90m, y=0.0m)
+# Pod 2: Front-Right Side (-90 deg heading offset, x=+1.00m, y=-0.95m)
+# Pod 3: Front-Left Side (+90 deg heading offset, x=+1.00m, y=+0.95m)
 DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
     PodExtrinsics(
         pod_id=0,
         name="front_center",
         yaw_deg=0.0,
-        x_offset=0.55,
+        x_offset=1.90,
         y_offset=0.0,
-        z_offset=0.35,
+        z_offset=1.05,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -38,11 +39,11 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
     ),
     PodExtrinsics(
         pod_id=1,
-        name="front_left",
-        yaw_deg=45.0,
-        x_offset=0.45,
-        y_offset=0.30,
-        z_offset=0.35,
+        name="rear_center",
+        yaw_deg=180.0,
+        x_offset=-1.90,
+        y_offset=0.0,
+        z_offset=1.05,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -54,10 +55,25 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
     PodExtrinsics(
         pod_id=2,
         name="front_right",
-        yaw_deg=-45.0,
-        x_offset=0.45,
-        y_offset=-0.30,
-        z_offset=0.35,
+        yaw_deg=-90.0,
+        x_offset=1.00,
+        y_offset=-0.95,
+        z_offset=1.10,
+        fx=600.0,
+        fy=600.0,
+        cx=320.0,
+        cy=240.0,
+        lidar_to_cam_tx=0.0,
+        lidar_to_cam_ty=-0.05,
+        lidar_to_cam_tz=-0.05,
+    ),
+    PodExtrinsics(
+        pod_id=3,
+        name="front_left",
+        yaw_deg=90.0,
+        x_offset=1.00,
+        y_offset=0.95,
+        z_offset=1.10,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -67,6 +83,7 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
         lidar_to_cam_tz=-0.05,
     ),
 )
+
 
 
 class LidarCameraFusionEngine:

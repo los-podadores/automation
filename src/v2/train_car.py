@@ -1,7 +1,7 @@
 """Distributed RLlib PPO training script for the autonomous car.
 
-Trains continuous Ackermann navigation policy using the 154-float spatial
-perception observation space across the Ray cluster.
+Trains continuous non-holonomic Ackermann navigation policy using the 156-float
+360-degree spatial perception observation space across the Ray cluster.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-import ray
-from ray.rllib.algorithms.ppo import PPOConfig
-from ray.tune.registry import register_env
+import ray  # noqa: E402
+from ray.rllib.algorithms.ppo import PPOConfig  # noqa: E402
+from ray.tune.registry import register_env  # noqa: E402
 
 from src.sim.car_gazebo_env import CarGazeboEnv  # noqa: E402
 from src.v2.cluster_config import HEAD_ADDRESS, HEAD_TMPDIR  # noqa: E402

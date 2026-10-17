@@ -1,4 +1,4 @@
-"""Spatial map builder for converting 3D obstacle tracks into RL policy observations."""
+"""Spatial map builder for converting 3D obstacle tracks and walls into RL policy observations."""
 
 from __future__ import annotations
 
@@ -8,11 +8,17 @@ from typing import Final
 
 import numpy as np
 
-from src.translate.fusion_types import CLASS_FREE, TrackedObstacle
+from src.translate.config import LIDAR_FOV_RAD, LIDAR_MAX_RANGE, LIDAR_NUM_RAYS
+from src.translate.fusion_types import (
+    CLASS_FREE,
+    CLASS_STATIC_HAZARD,
+    GoalState,
+    TrackedObstacle,
+)
 
-NUM_RAYS: Final[int] = 72
-MAX_RANGE_METERS: Final[float] = 25.0
-RAY_FOV_RAD: Final[float] = math.pi  # 180 degrees (-pi/2 to +pi/2)
+NUM_RAYS: Final[int] = LIDAR_NUM_RAYS
+MAX_RANGE_METERS: Final[float] = LIDAR_MAX_RANGE
+RAY_FOV_RAD: Final[float] = LIDAR_FOV_RAD  # 360 degrees surround (-pi to +pi)
 ANGULAR_RESOLUTION: Final[float] = RAY_FOV_RAD / NUM_RAYS
 
 
@@ -34,29 +40,8 @@ class EgoKinematics:
         )
 
 
-@dataclass(frozen=True)
-class PathDeviation:
-    """Cross-track error, heading error, and road geometry."""
-
-    lateral_error: float  # Distance from road/lane center in meters (+left / -right)
-    heading_error: float  # Angular deviation from lane direction (rad)
-    curvature_now: float  # Road curvature 1/R at current position (1/m)
-    curvature_lookahead: float  # Road curvature 1/R 10 meters ahead (1/m)
-
-    def to_array(self) -> np.ndarray:
-        return np.array(
-            [
-                self.lateral_error,
-                self.heading_error,
-                self.curvature_now,
-                self.curvature_lookahead,
-            ],
-            dtype=np.float32,
-        )
-
-
 class SpatialMapBuilder:
-    """Encodes tracked obstacles and ego state into a normalized observation vector."""
+    """Encodes 360-degree tracked obstacles, walls, and ego state into an observation vector."""
 
     def __init__(
         self,
@@ -65,45 +50,46 @@ class SpatialMapBuilder:
     ) -> None:
         self.num_rays = num_rays
         self.max_range = max_range
-        # Angles for each ray center, from -pi/2 (-90 deg, right) to +pi/2 (+90 deg, left)
-        self.ray_angles = np.linspace(-RAY_FOV_RAD / 2.0, RAY_FOV_RAD / 2.0, self.num_rays)
+        # Angles for each ray center covering full 360 degrees: [-pi, +pi)
+        self.ray_angles = np.linspace(-math.pi, math.pi, self.num_rays, endpoint=False)
 
     def compute_ray_scan(
         self,
         obstacles: list[TrackedObstacle],
+        wall_segments_ego: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Cast 72 radial rays across the forward 180-degree field of view.
+        """Cast 72 radial rays across the full 360-degree surround perimeter.
+
+        Args:
+            obstacles: List of tracked obstacles in vehicle ego frame.
+            wall_segments_ego: Optional 2D line segments ((x1, y1), (x2, y2)) of walls in ego frame.
 
         Returns:
-            distances: (72,) normalized float array in [0.0, 1.0], where 1.0 is unobstructed.
-            classes: (72,) int/float array of spatial class codes (0=Free, 1=Vehicle, 2=Ped, 3=Static).
+            distances: (72,) normalized float array in [0.0, 1.0].
+            classes: (72,) float array of spatial class codes (0=Free, 1=Vehicle, 2=Ped, 3=Static).
         """
         distances = np.full(self.num_rays, self.max_range, dtype=np.float32)
         classes = np.full(self.num_rays, CLASS_FREE, dtype=np.float32)
 
+        # 1. Cast against point/bounding obstacles
         for obs in obstacles:
-            # Only consider obstacles in front of the vehicle
-            if obs.rel_x <= 0.05:
-                continue
-
             dist = obs.distance
-            if dist > self.max_range:
+            if dist > self.max_range + obs.radius:
                 continue
 
-            azimuth = obs.azimuth  # rad: -pi/2 (right) to +pi/2 (left)
-            if abs(azimuth) > (RAY_FOV_RAD / 2.0 + 0.2):
-                continue
-
-            # Angular width of obstacle given its radius
+            azimuth = obs.azimuth  # rad: -pi to +pi
             ang_radius = math.asin(min(1.0, obs.radius / max(dist, 0.1)))
-            min_ang = azimuth - ang_radius
-            max_ang = azimuth + ang_radius
 
-            # Find rays intersected by this obstacle
-            ray_indices = np.where((self.ray_angles >= min_ang) & (self.ray_angles <= max_ang))[0]
+            # Angular difference wrapped to [-pi, pi]
+            ang_diff = np.arctan2(
+                np.sin(self.ray_angles - azimuth),
+                np.cos(self.ray_angles - azimuth),
+            )
+            hit_mask = np.abs(ang_diff) <= ang_radius
+            ray_indices = np.where(hit_mask)[0]
+
             if len(ray_indices) == 0:
-                # Fallback to single closest ray if obstacle is very small or distant
-                closest_idx = int(np.argmin(np.abs(self.ray_angles - azimuth)))
+                closest_idx = int(np.argmin(np.abs(ang_diff)))
                 ray_indices = np.array([closest_idx])
 
             obs_code = float(obs.to_spatial_code())
@@ -114,28 +100,57 @@ class SpatialMapBuilder:
                     distances[idx] = boundary_dist
                     classes[idx] = obs_code
 
+        # 2. Cast against wall segments in ego coordinates
+        if wall_segments_ego:
+            for (wx1, wy1), (wx2, wy2) in wall_segments_ego:
+                # Segment vector
+                dx = wx2 - wx1
+                dy = wy2 - wy1
+                seg_len_sq = dx * dx + dy * dy
+                if seg_len_sq < 1e-4:
+                    continue
+
+                for i, r_ang in enumerate(self.ray_angles):
+                    rx = math.cos(r_ang)
+                    ry = math.sin(r_ang)
+
+                    # Ray from (0, 0) in direction (rx, ry) vs line segment (wx1, wy1) to (wx2, wy2)
+                    det = dx * ry - dy * rx
+                    if abs(det) < 1e-6:
+                        continue
+
+                    # t is ray distance, u is segment parameter [0, 1]
+                    t = (dx * wy1 - dy * wx1) / det
+                    u = (rx * wy1 - ry * wx1) / det
+
+                    if t > 0.0 and 0.0 <= u <= 1.0 and t < distances[i]:
+                        distances[i] = t
+                        classes[i] = float(CLASS_STATIC_HAZARD)
+
         # Normalize distance to [0.0, 1.0]
-        norm_distances = distances / self.max_range
+        norm_distances = np.clip(distances / self.max_range, 0.0, 1.0)
         return norm_distances, classes
 
     def build_observation(
         self,
         kinematics: EgoKinematics,
-        deviation: PathDeviation,
+        goal_state: GoalState,
         obstacles: list[TrackedObstacle],
+        wall_segments_ego: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
     ) -> np.ndarray:
-        """Assemble the complete 154-float observation vector for RLlib.
+        """Assemble the complete 156-float observation vector for RLlib.
 
         Layout:
-          [0:6]   - EgoKinematics (vx, vy, steering, yaw_rate, ax, ay)
-          [6:10]  - PathDeviation (lateral_error, heading_error, curvature_now, curvature_lookahead)
-          [10:82] - Normalized radial distances (72 floats in [0, 1])
-          [82:154]- Categorical obstacle classes (72 floats in {0, 1, 2, 3})
+          [0:6]    - EgoKinematics (vx, vy, steering, yaw_rate, ax, ay)
+          [6:12]   - GoalState (dx_ego, dy_ego, distance, heading_error, cross_track_error, path_heading_error)
+          [12:84]  - Normalized radial distances (72 floats in [0, 1])
+          [84:156] - Categorical obstacle classes (72 floats in {0, 1, 2, 3})
         """
         k_arr = kinematics.to_array()
-        d_arr = deviation.to_array()
-        dist_arr, cls_arr = self.compute_ray_scan(obstacles)
+        g_arr = goal_state.to_array()
+        dist_arr, cls_arr = self.compute_ray_scan(obstacles, wall_segments_ego=wall_segments_ego)
 
-        obs = np.concatenate([k_arr, d_arr, dist_arr, cls_arr]).astype(np.float32)
-        assert len(obs) == 154, f"Observation size mismatch: expected 154, got {len(obs)}"
+        obs = np.concatenate([k_arr, g_arr, dist_arr, cls_arr]).astype(np.float32)
+        assert len(obs) == 156, f"Observation size mismatch: expected 156, got {len(obs)}"
         return obs
+
