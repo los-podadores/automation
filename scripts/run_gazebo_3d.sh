@@ -11,22 +11,24 @@ export GZ_SIM_RESOURCE_PATH="$DIR/src/v2/model:${GZ_SIM_RESOURCE_PATH:-}"
 
 echo "=========================================================="
 echo "    Los Podadores — 3D Gazebo Simulation & Teleop"
-echo "=========================================================="
+PRESET="${1:-demo_90deg}"
+echo "    Preset: $PRESET"
 
 # Terminate any lingering simulation, bridge, or rogue topic publishers from previous runs
 kill -9 $(pgrep -f "gz sim" 2>/dev/null) $(pgrep -f "ros_gz_bridge" 2>/dev/null) $(pgrep -f "ros2 topic pub" 2>/dev/null) $(pgrep -f "teleop.py" 2>/dev/null) 2>/dev/null || true
 
-echo "[1/3] Generating guaranteed-passable procedural track..."
+echo "[1/3] Generating procedural track layout ($PRESET)..."
 uv run python -c "
+import sys
 from src.sim.track_generator import ProceduralTrackGenerator
 from pathlib import Path
 gen = ProceduralTrackGenerator(default_road_width=7.0)
-track = gen.generate_track(seed=None, length=95.0, road_width=7.0, num_obstacles=4)
+track = gen.generate_track(seed=None, preset='$PRESET')
 sdf_p = Path('src/v2/model/procedural_track.sdf')
 json_p = Path('src/v2/model/procedural_track.json')
 track.export_gazebo_sdf(sdf_p)
 track.export_json(json_p)
-print(f'  Track exported to {sdf_p} and {json_p} ({len(track.wall_segments)} walls, {len(track.obstacles)} obstacles)')
+print(f'  Track ({track.preset_name}) exported: {len(track.wall_segments)} walls, {len(track.obstacles)} obstacles, nominal length: {track.nominal_length:.1f}m, max steps: {track.max_episode_steps}')
 "
 
 echo "[2/3] Launching ROS 2 Jazzy Parameter Bridge in background..."
@@ -52,4 +54,4 @@ trap cleanup EXIT INT TERM
 sleep 3.0
 
 echo "  Starting Teleoperation HUD with live ROS 2 bridge to Gazebo Harmonic..."
-./scripts/run_teleop --backend gazebo
+./scripts/run_teleop --backend gazebo --preset "$PRESET"

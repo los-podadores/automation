@@ -56,7 +56,11 @@ class CarGazeboEnv(gym.Env):
         self.track_length = track_length
         self.road_width = road_width
         self.rng = np.random.default_rng(random_seed)
-        self.track_path = track_path if track_path is not None else Path("src/v2/model/procedural_track.json")
+        self.track_path = (
+            track_path
+            if track_path is not None
+            else Path("src/v2/model/procedural_track.json")
+        )
 
         # 156 floats: 6 kinematics + 6 GoalState + 72 ray distances + 72 ray classes
         self.observation_space = gym.spaces.Box(
@@ -82,6 +86,7 @@ class CarGazeboEnv(gym.Env):
         self.mission_phase: int = PHASE_A_TO_B
         self.hold_steps: int = 0
         self.hold_duration_steps: int = 40  # 2 seconds at 20 Hz for remote teleop hold
+        self.max_episode_steps: int = 2400
 
         # Live ROS 2 / Gazebo Bridge
         self.ros_bridge: Any | None = None
@@ -96,7 +101,9 @@ class CarGazeboEnv(gym.Env):
         self.car_y: float = 0.0
         self.car_yaw: float = 0.0
         self.car_vx: float = 0.0  # Signed forward velocity (negative for reverse)
-        self.car_vy: float = 0.0  # Lateral slip velocity (near zero in no-slip Ackermann)
+        self.car_vy: float = (
+            0.0  # Lateral slip velocity (near zero in no-slip Ackermann)
+        )
         self.car_steer: float = 0.0
         self.car_ax: float = 0.0
         self.car_yaw_rate: float = 0.0
@@ -139,10 +146,15 @@ class CarGazeboEnv(gym.Env):
 
         # Angle to target in ego frame
         target_heading = math.atan2(dy_world, dx_world)
-        heading_error = math.atan2(math.sin(target_heading - self.car_yaw), math.cos(target_heading - self.car_yaw))
+        heading_error = math.atan2(
+            math.sin(target_heading - self.car_yaw),
+            math.cos(target_heading - self.car_yaw),
+        )
 
         # Cross-track error to nearest waypoint on nominal path
-        dists_to_wps = np.hypot(waypoints[:, 0] - self.car_x, waypoints[:, 1] - self.car_y)
+        dists_to_wps = np.hypot(
+            waypoints[:, 0] - self.car_x, waypoints[:, 1] - self.car_y
+        )
         nearest_idx = int(np.argmin(dists_to_wps))
         near_wp = waypoints[nearest_idx]
 
@@ -150,7 +162,11 @@ class CarGazeboEnv(gym.Env):
         lookahead_idx = min(len(waypoints) - 1, nearest_idx + 8)
         path_dx = waypoints[lookahead_idx, 0] - near_wp[0]
         path_dy = waypoints[lookahead_idx, 1] - near_wp[1]
-        path_heading = math.atan2(path_dy, path_dx) if (path_dx**2 + path_dy**2) > 0.01 else near_wp[2]
+        path_heading = (
+            math.atan2(path_dy, path_dx)
+            if (path_dx**2 + path_dy**2) > 0.01
+            else near_wp[2]
+        )
 
         path_heading_error = math.atan2(
             math.sin(path_heading - self.car_yaw),
@@ -172,7 +188,9 @@ class CarGazeboEnv(gym.Env):
             phase=self.mission_phase,
         )
 
-    def _transform_walls_to_ego(self) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    def _transform_walls_to_ego(
+        self,
+    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
         if not self.track:
             return []
 
@@ -236,20 +254,32 @@ class CarGazeboEnv(gym.Env):
         # Synchronize track geometry
         if self.sim_mode == "gazebo" and self.track_path.exists():
             self.track = ProceduralTrack.load_json(self.track_path)
-        elif options and "track" in options and isinstance(options["track"], ProceduralTrack):
+        elif (
+            options
+            and "track" in options
+            and isinstance(options["track"], ProceduralTrack)
+        ):
             self.track = options["track"]
         else:
+            preset = (
+                str(options["preset"])
+                if options and "preset" in options
+                else "demo_90deg"
+            )
             track_seed = int(self.rng.integers(0, 1_000_000))
             self.track = self.track_gen.generate_track(
                 seed=track_seed,
                 length=self.track_length,
                 road_width=self.road_width,
                 num_obstacles=self.num_obstacles,
+                preset=preset,
             )
 
         self.step_count = 0
         self.mission_phase = PHASE_A_TO_B
         self.hold_steps = 0
+        if self.track is not None:
+            self.max_episode_steps = self.track.max_episode_steps
 
         # Spawn vehicle at Point A aligned with track
         sx, sy, syaw = self.track.start_pose
@@ -266,7 +296,9 @@ class CarGazeboEnv(gym.Env):
 
         if self.sim_mode == "gazebo":
             if self.ros_bridge is None:
-                raise RuntimeError("sim_mode is 'gazebo' but ros_bridge is not initialized.")
+                raise RuntimeError(
+                    "sim_mode is 'gazebo' but ros_bridge is not initialized."
+                )
             # Wait up to 1.0s for background executor to receive initial state from Gazebo
             t_start = time.monotonic()
             while time.monotonic() - t_start < 1.0:
@@ -278,8 +310,12 @@ class CarGazeboEnv(gym.Env):
                         self.car_yaw = odom["yaw"]
                     else:
                         self.car_yaw = syaw + odom["yaw"]
-                        self.car_x = sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
-                        self.car_y = sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                        self.car_x = (
+                            sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+                        )
+                        self.car_y = (
+                            sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                        )
                     self.car_vx = odom["vx"]
                     self.car_yaw_rate = odom["yaw_rate"]
                 if scans:
@@ -312,7 +348,9 @@ class CarGazeboEnv(gym.Env):
 
         if self.sim_mode == "gazebo":
             if self.ros_bridge is None:
-                raise RuntimeError("sim_mode is 'gazebo' but ros_bridge is not initialized.")
+                raise RuntimeError(
+                    "sim_mode is 'gazebo' but ros_bridge is not initialized."
+                )
             return self.map_builder.build_observation(
                 kinematics=kinematics,
                 goal_state=goal_state,
@@ -321,7 +359,10 @@ class CarGazeboEnv(gym.Env):
 
         # Mock perception fallback for pure mock simulation
         tracked_obstacles = self.mock_perception.filter_and_noise(
-            self.car_x, self.car_y, self.car_yaw, self.track.obstacles if self.track else []
+            self.car_x,
+            self.car_y,
+            self.car_yaw,
+            self.track.obstacles if self.track else [],
         )
         wall_segments_ego = self._transform_walls_to_ego()
 
@@ -362,10 +403,16 @@ class CarGazeboEnv(gym.Env):
                     self.car_y = odom["y"]
                     self.car_yaw = odom["yaw"]
                 else:
-                    sx, sy, syaw = self.track.start_pose if self.track else (0.0, 0.0, 0.0)
+                    sx, sy, syaw = (
+                        self.track.start_pose if self.track else (0.0, 0.0, 0.0)
+                    )
                     self.car_yaw = syaw + odom["yaw"]
-                    self.car_x = sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
-                    self.car_y = sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                    self.car_x = (
+                        sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+                    )
+                    self.car_y = (
+                        sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                    )
                 self.car_vx = odom["vx"]
                 self.car_yaw_rate = odom["yaw_rate"]
                 self.car_steer = target_steer
@@ -397,11 +444,10 @@ class CarGazeboEnv(gym.Env):
             self.car_x += self.car_vx * math.cos(self.car_yaw) * DT_SECONDS
             self.car_y += self.car_vx * math.sin(self.car_yaw) * DT_SECONDS
 
-            # 4. Update Dynamic Obstacles
-            if self.track:
-                for obs in self.track.obstacles:
-                    obs.world_x += obs.world_vx * DT_SECONDS
-                obs.world_y += obs.world_vy * DT_SECONDS
+        # 4. Update Dynamic Obstacles
+        if self.track:
+            for obs in self.track.obstacles:
+                obs.step(DT_SECONDS)
 
         # 5. Collision Checks
         wall_collision = self._check_wall_collision()
@@ -455,7 +501,7 @@ class CarGazeboEnv(gym.Env):
             reward -= 100.0
 
         terminated = collision or mission_completed
-        truncated = self.step_count >= 1200
+        truncated = self.step_count >= self.max_episode_steps
 
         self.last_steer_action = steer_cmd
         self.last_throttle_action = throttle_cmd
@@ -478,4 +524,3 @@ class CarGazeboEnv(gym.Env):
         if self.ros_bridge is not None:
             self.ros_bridge.close()
             self.ros_bridge = None
-

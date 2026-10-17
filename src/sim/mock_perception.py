@@ -30,6 +30,35 @@ class SimulatedEntity:
     world_vx: float
     world_vy: float
     radius: float
+    shape: str = "cylinder"  # "cylinder" or "box"
+    length: float = 0.0  # longitudinal footprint (if box)
+    width: float = 0.0  # lateral footprint (if box)
+    height: float = 0.8
+    yaw: float = 0.0  # orientation (radians)
+    is_dynamic: bool = False
+    patrol_distance: float = 0.0  # max excursion before reversing
+    origin_x: float = 0.0
+    origin_y: float = 0.0
+
+    def step(self, dt: float) -> None:
+        """Advance dynamic entity position along velocity vector with boundary bouncing."""
+        if not self.is_dynamic:
+            return
+        speed = math.hypot(self.world_vx, self.world_vy)
+        if speed < 1e-4:
+            return
+
+        self.world_x += self.world_vx * dt
+        self.world_y += self.world_vy * dt
+
+        if self.patrol_distance > 0.0:
+            dist_from_origin = math.hypot(
+                self.world_x - self.origin_x, self.world_y - self.origin_y
+            )
+            if dist_from_origin >= self.patrol_distance:
+                # Reverse velocity vector
+                self.world_vx = -self.world_vx
+                self.world_vy = -self.world_vy
 
 
 class MockPerceptionEngine:
@@ -82,7 +111,6 @@ class MockPerceptionEngine:
             if dist > MAX_PERCEPTION_RANGE:
                 continue
 
-
             # 3. Apply realistic dropout (occasional occlusion or missed detection)
             if self.rng.random() < self.dropout_probability:
                 continue
@@ -110,7 +138,9 @@ class MockPerceptionEngine:
                     rel_vx=float(ego_vx),
                     rel_vy=float(ego_vy),
                     radius=ent.radius,
-                    confidence=float(max(0.45, 1.0 - (dist / MAX_PERCEPTION_RANGE) * 0.3)),
+                    confidence=float(
+                        max(0.45, 1.0 - (dist / MAX_PERCEPTION_RANGE) * 0.3)
+                    ),
                 )
             )
 

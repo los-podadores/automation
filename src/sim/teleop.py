@@ -9,12 +9,7 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
-import shutil
-import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
 from typing import Final
 
@@ -67,7 +62,11 @@ TEXT_CYAN: Final[tuple[int, int, int]] = (60, 200, 240)
 TEXT_YELLOW: Final[tuple[int, int, int]] = (245, 200, 50)
 
 # Entity Colors
-CAR_BODY_COLOR: Final[tuple[int, int, int]] = (235, 130, 30)  # Orange matching test drive footprint
+CAR_BODY_COLOR: Final[tuple[int, int, int]] = (
+    235,
+    130,
+    30,
+)  # Orange matching test drive footprint
 CAR_CABIN_COLOR: Final[tuple[int, int, int]] = (195, 100, 20)
 TIRE_COLOR: Final[tuple[int, int, int]] = (20, 20, 24)
 OBS_VEHICLE_COLOR: Final[tuple[int, int, int]] = (60, 140, 240)
@@ -81,20 +80,22 @@ PIXELS_PER_METER: Final[float] = 14.0  # 1 meter = 14 pixels
 class CarTeleopApp:
     """Interactive GUI application for controlling the autonomous car in 3D simulation."""
 
-    def __init__(self, backend: str = "sim") -> None:
+    def __init__(self, backend: str = "sim", preset: str = "demo_90deg") -> None:
         pygame.init()
         pygame.display.set_caption("Los Podadores — Ackermann Car Teleop & 360° LiDAR")
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.clock = pygame.time.Clock()
         self.backend = backend
+        self.preset = preset
 
         self.font_title = pygame.font.SysFont("monospace", 17, bold=True)
         self.font_body = pygame.font.SysFont("monospace", 13)
         self.font_small = pygame.font.SysFont("monospace", 11)
 
         sim_mode = "gazebo" if self.backend == "gazebo" else "mock"
-        self.env = CarGazeboEnv(sim_mode=sim_mode, num_obstacles=4, track_length=95.0, road_width=7.0)
-        self.obs, self.info = self.env.reset()
+        self.env = CarGazeboEnv(sim_mode=sim_mode, num_obstacles=4, road_width=7.0)
+        reset_opts = {"preset": self.preset} if self.backend == "sim" else None
+        self.obs, self.info = self.env.reset(options=reset_opts)
 
         self.steer_action: float = 0.0
         self.throttle_action: float = 0.0
@@ -102,12 +103,14 @@ class CarTeleopApp:
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
         if self.backend == "gazebo":
-            self.status_msg = "Connected to Gazebo 3D via ROS 2 Bridge."
+            self.status_msg = f"Gazebo 3D | Preset: {self.preset}"
         else:
-            self.status_msg = "Initialized. Drive with WASD / Arrows."
+            self.status_msg = f"Initialized ({self.preset}). Drive with WASD / Arrows."
         self.status_timer: int = 75
 
-    def world_to_screen(self, wx: float, wy: float, car_x: float, car_y: float) -> tuple[int, int]:
+    def world_to_screen(
+        self, wx: float, wy: float, car_x: float, car_y: float
+    ) -> tuple[int, int]:
         """Convert world coordinates (meters) to screen pixel coordinates centered on car."""
         cx = VIEW_W / 2.0
         cy = WINDOW_H / 2.0
@@ -137,7 +140,9 @@ class CarTeleopApp:
                     self.status_msg = "Generated new procedural track!"
                     self.status_timer = 60
                 if event.key == pygame.K_e:
-                    export_p = PROJECT_ROOT / "src" / "v2" / "model" / "procedural_track.sdf"
+                    export_p = (
+                        PROJECT_ROOT / "src" / "v2" / "model" / "procedural_track.sdf"
+                    )
                     if self.env.track:
                         self.env.track.export_gazebo_sdf(export_p)
                         self.status_msg = f"Exported Gazebo SDF: {export_p.name}"
@@ -145,7 +150,9 @@ class CarTeleopApp:
                 if event.key == pygame.K_TAB:
                     # Manually cycle mission phase
                     self.env.mission_phase = (self.env.mission_phase + 1) % 3
-                    phase_name = ["A -> B", "REMOTE HOLD", "B -> A"][self.env.mission_phase]
+                    phase_name = ["A -> B", "REMOTE HOLD", "B -> A"][
+                        self.env.mission_phase
+                    ]
                     self.status_msg = f"Switched mission phase: {phase_name}"
                     self.status_timer = 60
 
@@ -220,8 +227,14 @@ class CarTeleopApp:
             bp = self.world_to_screen(bx, by, car_x, car_y)
             pygame.draw.circle(self.screen, (40, 200, 90), ap, 10)
             pygame.draw.circle(self.screen, (30, 140, 240), bp, 10)
-            self.screen.blit(self.font_small.render("Point A", True, TEXT_WHITE), (ap[0] + 12, ap[1] - 8))
-            self.screen.blit(self.font_small.render("Point B", True, TEXT_WHITE), (bp[0] + 12, bp[1] - 8))
+            self.screen.blit(
+                self.font_small.render("Point A", True, TEXT_WHITE),
+                (ap[0] + 12, ap[1] - 8),
+            )
+            self.screen.blit(
+                self.font_small.render("Point B", True, TEXT_WHITE),
+                (bp[0] + 12, bp[1] - 8),
+            )
 
         # 3. Draw Flanking Red Walls
         if self.env.track:
@@ -235,7 +248,9 @@ class CarTeleopApp:
         if len(self.trail) > 400:
             self.trail.pop(0)
         if len(self.trail) > 1:
-            trail_pts = [self.world_to_screen(tx, ty, car_x, car_y) for tx, ty in self.trail]
+            trail_pts = [
+                self.world_to_screen(tx, ty, car_x, car_y) for tx, ty in self.trail
+            ]
             pygame.draw.lines(self.screen, (60, 130, 90), False, trail_pts, 2)
 
         # 5. Draw 360-degree LiDAR Radar Rays
@@ -264,26 +279,76 @@ class CarTeleopApp:
 
             pygame.draw.line(self.screen, color, car_screen, end_screen, 1)
 
-        # 6. Draw Obstacles
+        # 6. Draw Obstacles (Box/Cylinder, Static/Dynamic)
         if self.env.track:
             for obs in self.env.track.obstacles:
-                op = self.world_to_screen(obs.world_x, obs.world_y, car_x, car_y)
-                r_px = max(4, int(obs.radius * PIXELS_PER_METER))
-                c = OBS_VEHICLE_COLOR if obs.class_name == "Car" else OBS_PED_COLOR if obs.class_name == "Person" else OBS_STATIC_COLOR
-                pygame.draw.circle(self.screen, c, op, r_px)
-                pygame.draw.circle(self.screen, TEXT_WHITE, op, r_px, 1)
+                if obs.shape == "box" and obs.length > 0.0 and obs.width > 0.0:
+                    hl = obs.length / 2.0
+                    hw = obs.width / 2.0
+                    cos_o = math.cos(obs.yaw)
+                    sin_o = math.sin(obs.yaw)
+                    corners = [
+                        (
+                            obs.world_x + hl * cos_o - hw * sin_o,
+                            obs.world_y + hl * sin_o + hw * cos_o,
+                        ),
+                        (
+                            obs.world_x + hl * cos_o + hw * sin_o,
+                            obs.world_y + hl * sin_o - hw * cos_o,
+                        ),
+                        (
+                            obs.world_x - hl * cos_o + hw * sin_o,
+                            obs.world_y - hl * sin_o - hw * cos_o,
+                        ),
+                        (
+                            obs.world_x - hl * cos_o - hw * sin_o,
+                            obs.world_y - hl * sin_o + hw * cos_o,
+                        ),
+                    ]
+                    screen_pts = [
+                        self.world_to_screen(cx, cy, car_x, car_y) for cx, cy in corners
+                    ]
+                    c = (
+                        (190, 50, 40)
+                        if obs.class_name == "Shipping Container"
+                        else OBS_VEHICLE_COLOR
+                    )
+                    pygame.draw.polygon(self.screen, c, screen_pts)
+                    pygame.draw.polygon(self.screen, TEXT_WHITE, screen_pts, 2)
+                else:
+                    op = self.world_to_screen(obs.world_x, obs.world_y, car_x, car_y)
+                    r_px = max(4, int(obs.radius * PIXELS_PER_METER))
+                    c = (
+                        OBS_VEHICLE_COLOR
+                        if obs.class_name == "Car"
+                        else OBS_PED_COLOR
+                        if obs.class_name == "Person"
+                        else OBS_STATIC_COLOR
+                    )
+                    pygame.draw.circle(self.screen, c, op, r_px)
+                    pygame.draw.circle(self.screen, TEXT_WHITE, op, r_px, 1)
+
+                # Draw velocity arrow for dynamic obstacles
+                if obs.is_dynamic:
+                    op = self.world_to_screen(obs.world_x, obs.world_y, car_x, car_y)
+                    tip_x = obs.world_x + obs.world_vx * 1.5
+                    tip_y = obs.world_y + obs.world_vy * 1.5
+                    tip_s = self.world_to_screen(tip_x, tip_y, car_x, car_y)
+                    pygame.draw.line(self.screen, (255, 235, 60), op, tip_s, 3)
 
         # 7. Draw Scaled Vehicle (3.8m length, 1.9m width, Ackermann wheels)
         self._draw_vehicle(car_x, car_y, car_yaw, self.env.car_steer)
 
-    def _draw_vehicle(self, car_x: float, car_y: float, car_yaw: float, steer: float) -> None:
+    def _draw_vehicle(
+        self, car_x: float, car_y: float, car_yaw: float, steer: float
+    ) -> None:
         """Render the 3.8m car body and steerable front wheels."""
         cos_y = math.cos(car_yaw)
         sin_y = math.sin(car_yaw)
 
         # 4 corners of the car body in ego frame (+X forward, +Y left)
         hl = CAR_LENGTH / 2.0  # 1.90m
-        hw = CAR_WIDTH / 2.0   # 0.95m
+        hw = CAR_WIDTH / 2.0  # 0.95m
         corners = [
             (+hl, +hw),
             (+hl, -hw),
@@ -317,15 +382,15 @@ class CarTeleopApp:
         # Draw 4 Wheels
         wheel_l = 0.76  # 2 * 0.38m radius
         wheel_w = 0.28
-        axle_f = WHEELBASE / 2.0   # +1.25m
+        axle_f = WHEELBASE / 2.0  # +1.25m
         axle_r = -WHEELBASE / 2.0  # -1.25m
-        track_h = 0.80             # +/- 0.80m
+        track_h = 0.80  # +/- 0.80m
 
         wheel_configs = [
-            (axle_f, +track_h, steer),   # Front Left (Steerable)
-            (axle_f, -track_h, steer),   # Front Right (Steerable)
-            (axle_r, +track_h, 0.0),     # Rear Left (Fixed)
-            (axle_r, -track_h, 0.0),     # Rear Right (Fixed)
+            (axle_f, +track_h, steer),  # Front Left (Steerable)
+            (axle_f, -track_h, steer),  # Front Right (Steerable)
+            (axle_r, +track_h, 0.0),  # Rear Left (Fixed)
+            (axle_r, -track_h, 0.0),  # Rear Right (Fixed)
         ]
 
         for wx_ego, wy_ego, w_steer in wheel_configs:
@@ -354,8 +419,8 @@ class CarTeleopApp:
 
         # Draw 4 Sensor Pod Indicators
         pod_offsets = [
-            (+1.90, 0.0, (50, 220, 100)),    # Front
-            (-1.90, 0.0, (220, 50, 50)),     # Rear
+            (+1.90, 0.0, (50, 220, 100)),  # Front
+            (-1.90, 0.0, (220, 50, 50)),  # Rear
             (+1.00, -0.95, (50, 180, 240)),  # Right
             (+1.00, +0.95, (50, 180, 240)),  # Left
         ]
@@ -380,18 +445,32 @@ class CarTeleopApp:
         y += 24
 
         if self.backend == "gazebo":
-            backend_lbl = self.font_small.render("BACKEND: GAZEBO 3D (ROS 2 BRIDGE) | ACKERMANN", True, TEXT_GREEN)
+            backend_lbl = self.font_small.render(
+                "BACKEND: GAZEBO 3D (ROS 2 BRIDGE) | ACKERMANN", True, TEXT_GREEN
+            )
         else:
-            backend_lbl = self.font_small.render(f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN", True, TEXT_MUTED)
+            backend_lbl = self.font_small.render(
+                f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN",
+                True,
+                TEXT_MUTED,
+            )
         self.screen.blit(backend_lbl, (x, y))
         y += 30
 
         # Mission Phase Header
         phase_idx = self.env.mission_phase
-        phase_names = ["PHASE 0: NAV A -> B", "PHASE 1: REMOTE HOLD (POINT B)", "PHASE 2: NAV B -> A"]
+        phase_names = [
+            "PHASE 0: NAV A -> B",
+            "PHASE 1: REMOTE HOLD (POINT B)",
+            "PHASE 2: NAV B -> A",
+        ]
         phase_colors = [TEXT_GREEN, TEXT_YELLOW, TEXT_CYAN]
-        phase_text = self.font_body.render(phase_names[phase_idx], True, phase_colors[phase_idx])
-        pygame.draw.rect(self.screen, (35, 45, 60), (x - 6, y - 4, PANEL_W - 36, 26), border_radius=4)
+        phase_text = self.font_body.render(
+            phase_names[phase_idx], True, phase_colors[phase_idx]
+        )
+        pygame.draw.rect(
+            self.screen, (35, 45, 60), (x - 6, y - 4, PANEL_W - 36, 26), border_radius=4
+        )
         self.screen.blit(phase_text, (x, y))
         y += 36
 
@@ -400,7 +479,15 @@ class CarTeleopApp:
         steer_deg = math.degrees(self.env.car_steer)
         goal_dist = self.info.get("dist_to_goal", 0.0)
 
-        self._draw_gauge("SPEED (m/s):", speed, MIN_SPEED_MPS, MAX_SPEED_MPS, x, y, TEXT_GREEN if speed >= 0 else TEXT_YELLOW)
+        self._draw_gauge(
+            "SPEED (m/s):",
+            speed,
+            MIN_SPEED_MPS,
+            MAX_SPEED_MPS,
+            x,
+            y,
+            TEXT_GREEN if speed >= 0 else TEXT_YELLOW,
+        )
         y += 50
         self._draw_gauge("STEER (deg):", steer_deg, -32.0, 32.0, x, y, TEXT_CYAN)
         y += 50
@@ -425,13 +512,34 @@ class CarTeleopApp:
         radar_cy = y + 75
         radar_rad = 65
         pygame.draw.circle(self.screen, (15, 20, 26), (radar_cx, radar_cy), radar_rad)
-        pygame.draw.circle(self.screen, (40, 50, 65), (radar_cx, radar_cy), radar_rad, 1)
-        pygame.draw.circle(self.screen, (30, 40, 52), (radar_cx, radar_cy), radar_rad // 2, 1)
-        pygame.draw.line(self.screen, (45, 55, 70), (radar_cx - radar_rad, radar_cy), (radar_cx + radar_rad, radar_cy), 1)
-        pygame.draw.line(self.screen, (45, 55, 70), (radar_cx, radar_cy - radar_rad), (radar_cx, radar_cy + radar_rad), 1)
+        pygame.draw.circle(
+            self.screen, (40, 50, 65), (radar_cx, radar_cy), radar_rad, 1
+        )
+        pygame.draw.circle(
+            self.screen, (30, 40, 52), (radar_cx, radar_cy), radar_rad // 2, 1
+        )
+        pygame.draw.line(
+            self.screen,
+            (45, 55, 70),
+            (radar_cx - radar_rad, radar_cy),
+            (radar_cx + radar_rad, radar_cy),
+            1,
+        )
+        pygame.draw.line(
+            self.screen,
+            (45, 55, 70),
+            (radar_cx, radar_cy - radar_rad),
+            (radar_cx, radar_cy + radar_rad),
+            1,
+        )
 
         # Draw car icon in center of radar
-        pygame.draw.rect(self.screen, CAR_BODY_COLOR, (radar_cx - 4, radar_cy - 8, 8, 16), border_radius=2)
+        pygame.draw.rect(
+            self.screen,
+            CAR_BODY_COLOR,
+            (radar_cx - 4, radar_cy - 8, 8, 16),
+            border_radius=2,
+        )
 
         # Plot 360-degree LiDAR returns on radar
         norm_dists = self.obs[12:84]
@@ -444,7 +552,13 @@ class CarTeleopApp:
                 rx = radar_cx + int(d_ratio * radar_rad * math.cos(ang))
                 ry = radar_cy + int(d_ratio * radar_rad * math.sin(ang))
                 h_cls = int(hit_classes[i])
-                col = OBS_VEHICLE_COLOR if h_cls == CLASS_VEHICLE else OBS_PED_COLOR if h_cls == CLASS_PEDESTRIAN else WALL_COLOR
+                col = (
+                    OBS_VEHICLE_COLOR
+                    if h_cls == CLASS_VEHICLE
+                    else OBS_PED_COLOR
+                    if h_cls == CLASS_PEDESTRIAN
+                    else WALL_COLOR
+                )
                 pygame.draw.circle(self.screen, col, (rx, ry), 2)
 
         radar_lbl = self.font_small.render("360° LIDAR (15m)", True, TEXT_MUTED)
@@ -456,7 +570,9 @@ class CarTeleopApp:
             self.status_timer -= 1
             msg_box = pygame.Rect(x - 6, y, PANEL_W - 36, 26)
             pygame.draw.rect(self.screen, (25, 40, 35), msg_box, border_radius=4)
-            self.screen.blit(self.font_small.render(self.status_msg, True, TEXT_GREEN), (x, y + 5))
+            self.screen.blit(
+                self.font_small.render(self.status_msg, True, TEXT_GREEN), (x, y + 5)
+            )
         y += 35
 
         # Controls Guide
@@ -496,17 +612,29 @@ class CarTeleopApp:
         bar_w = 340
         bar_h = 14
         bar_y = y + 20
-        pygame.draw.rect(self.screen, (15, 20, 26), (x, bar_y, bar_w, bar_h), border_radius=3)
-        pygame.draw.line(self.screen, (80, 95, 115), (x + bar_w // 2, bar_y - 2), (x + bar_w // 2, bar_y + bar_h + 2), 2)
+        pygame.draw.rect(
+            self.screen, (15, 20, 26), (x, bar_y, bar_w, bar_h), border_radius=3
+        )
+        pygame.draw.line(
+            self.screen,
+            (80, 95, 115),
+            (x + bar_w // 2, bar_y - 2),
+            (x + bar_w // 2, bar_y + bar_h + 2),
+            2,
+        )
 
         norm_val = np.clip(val, min_v, max_v)
         center_x = x + bar_w // 2
         fill_w = int((norm_val / (max_v - min_v) * 2.0) * (bar_w // 2))
 
         if fill_w > 0:
-            pygame.draw.rect(self.screen, color, (center_x, bar_y + 2, fill_w, bar_h - 4))
+            pygame.draw.rect(
+                self.screen, color, (center_x, bar_y + 2, fill_w, bar_h - 4)
+            )
         elif fill_w < 0:
-            pygame.draw.rect(self.screen, color, (center_x + fill_w, bar_y + 2, -fill_w, bar_h - 4))
+            pygame.draw.rect(
+                self.screen, color, (center_x + fill_w, bar_y + 2, -fill_w, bar_h - 4)
+            )
 
     def run(self) -> None:
         """Main loop: handle inputs, step physics, and render."""
@@ -515,8 +643,12 @@ class CarTeleopApp:
             running = self.handle_input()
 
             if not self.paused:
-                action = np.array([self.steer_action, self.throttle_action], dtype=np.float32)
-                self.obs, reward, terminated, truncated, self.info = self.env.step(action)
+                action = np.array(
+                    [self.steer_action, self.throttle_action], dtype=np.float32
+                )
+                self.obs, reward, terminated, truncated, self.info = self.env.step(
+                    action
+                )
                 self.total_reward += reward
 
                 if terminated or truncated:
@@ -541,10 +673,21 @@ class CarTeleopApp:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Car Teleop & 360 perception viewer")
-    parser.add_argument("--backend", choices=["sim", "gazebo"], default="sim", help="Backend simulation engine")
+    parser.add_argument(
+        "--backend",
+        choices=["sim", "gazebo"],
+        default="sim",
+        help="Backend simulation engine",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=["demo_90deg", "multi_zone_plaza", "random"],
+        default="demo_90deg",
+        help="Procedural track layout preset",
+    )
     args = parser.parse_args()
 
-    app = CarTeleopApp(backend=args.backend)
+    app = CarTeleopApp(backend=args.backend, preset=args.preset)
     app.run()
 
 
