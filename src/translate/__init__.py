@@ -1,10 +1,38 @@
-"""Obstacle detection and multi-lawn path planning module.
+"""Obstacle detection, sensor fusion, and spatial tracking module."""
 
-Uses YOLOv8s trained on the ROD-Dataset to detect real-world obstacles
-during inter-lawn navigation.
-"""
+from .fusion_types import (
+    CLASS_FREE,
+    CLASS_PEDESTRIAN,
+    CLASS_STATIC_HAZARD,
+    CLASS_VEHICLE,
+    PodExtrinsics,
+    TrackedObstacle,
+)
 
-from .detect import ObstacleDetector
-from .planner import MultiLawnPlanner
+__all__ = [
+    "CLASS_FREE",
+    "CLASS_PEDESTRIAN",
+    "CLASS_STATIC_HAZARD",
+    "CLASS_VEHICLE",
+    "PodExtrinsics",
+    "TrackedObstacle",
+    "ObstacleDetector",
+    "MultiLawnPlanner",
+    "LidarCameraFusionEngine",
+]
 
-__all__ = ["ObstacleDetector", "MultiLawnPlanner"]
+
+def __getattr__(name: str):
+    if name == "ObstacleDetector":
+        from .detect import ObstacleDetector
+
+        return ObstacleDetector
+    if name == "MultiLawnPlanner":
+        from .planner import MultiLawnPlanner
+
+        return MultiLawnPlanner
+    if name == "LidarCameraFusionEngine":
+        from .lidar_fusion import LidarCameraFusionEngine
+
+        return LidarCameraFusionEngine
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

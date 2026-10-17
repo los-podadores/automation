@@ -19,29 +19,9 @@ from .config import (
     TRANSIT_OBSTACLE_CLASSES,
 )
 
+from .fusion_types import Detection
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Detection:
-    """A single obstacle detection."""
-
-    class_name: str
-    class_id: int
-    confidence: float
-    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 in pixels
-    center: tuple[int, int]  # cx, cy in pixels
-    area: int  # bounding box area in pixels
-
-    @property
-    def is_transit_obstacle(self) -> bool:
-        target = self.class_name.lower()
-        return any(target == c.lower() for c in TRANSIT_OBSTACLE_CLASSES)
-
-    @property
-    def is_navigable(self) -> bool:
-        target = self.class_name.lower()
-        return any(target == c.lower() for c in NAVIGABLE_CLASSES)
 
 
 class ObstacleDetector:
