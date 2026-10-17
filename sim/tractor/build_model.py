@@ -42,6 +42,10 @@ def cylinder(parent: ET.Element, radius: float, length: float) -> None:
     element(shape, "length", length)
 
 
+def sphere(parent: ET.Element, radius: float) -> None:
+    element(element(element(parent, "geometry"), "sphere"), "radius", radius)
+
+
 def inertia(link: ET.Element, mass: float, diagonal: tuple, pose=None) -> None:
     inertial = element(link, "inertial")
     if pose is not None:
@@ -69,6 +73,8 @@ def shape_pair(
         element(part, "pose", pose)
         if shape == "box":
             box(part, dimensions)
+        elif shape == "sphere":
+            sphere(part, *dimensions)
         else:
             cylinder(part, *dimensions)
         if tag == "visual":
@@ -324,6 +330,80 @@ def write_xml(path: Path, root: ET.Element) -> None:
         stream.write("\n")
 
 
+def create_obstacle_world() -> ET.Element:
+    """Short crossing test with collidable, kinematic person/dog proxies."""
+    from obstacles import CROSSERS
+
+    sdf = create_world()
+    world = sdf.find("world")
+    world.set("name", "tractor_obstacles")
+    skin = (0.65, 0.43, 0.29, 1)
+    blue = (0.15, 0.32, 0.7, 1)
+    dark = (0.15, 0.17, 0.2, 1)
+    brown = (0.5, 0.28, 0.12, 1)
+    for name, spec in CROSSERS.items():
+        actor = element(world, "model", name=name)
+        yaw = math.copysign(math.pi / 2, spec["end_y"] - spec["start_y"])
+        element(actor, "pose", (spec["x"], spec["start_y"], 0, 0, 0, yaw))
+        link = element(actor, "link", name="body")
+        element(link, "kinematic", "true")
+        element(link, "gravity", "false")
+        inertia(link, 70 if name.startswith("person") else 12, (7, 7, 1))
+        if name.startswith("person"):
+            parts = [
+                ("torso", "box", (0.3, 0.38, 0.58), (0, 0, 1.05, 0, 0, 0), blue),
+                ("head", "sphere", (0.14,), (0, 0, 1.52, 0, 0, 0), skin),
+            ]
+            for side in (-1, 1):
+                parts.extend(
+                    [
+                        (
+                            f"leg_{side}",
+                            "cylinder",
+                            (0.085, 0.74),
+                            (0, side * 0.11, 0.37, 0, 0, 0),
+                            dark,
+                        ),
+                        (
+                            f"arm_{side}",
+                            "cylinder",
+                            (0.065, 0.55),
+                            (0, side * 0.27, 1.03, 0, 0, 0),
+                            blue,
+                        ),
+                    ]
+                )
+        else:
+            parts = [
+                ("torso", "box", (0.65, 0.28, 0.26), (0, 0, 0.39, 0, 0, 0), brown),
+                ("head", "sphere", (0.13,), (0.36, 0, 0.53, 0, 0, 0), brown),
+                ("snout", "box", (0.16, 0.15, 0.11), (0.49, 0, 0.5, 0, 0, 0), dark),
+                ("tail", "cylinder", (0.035, 0.32), (-0.4, 0, 0.5, 0, -0.8, 0), brown),
+            ]
+            for x in (-0.22, 0.22):
+                for y in (-0.11, 0.11):
+                    parts.append(
+                        (
+                            f"leg_{x}_{y}",
+                            "cylinder",
+                            (0.045, 0.28),
+                            (x, y, 0.14, 0, 0, 0),
+                            brown,
+                        )
+                    )
+        for part_name, shape, dims, pose, color in parts:
+            shape_pair(link, part_name, shape, dims, pose, color)
+        plugin(
+            actor,
+            "VelocityControl",
+            "velocity-control",
+            {
+                "topic": f"/model/{name}/cmd_vel",
+            },
+        )
+    return sdf
+
+
 def load_parameters() -> dict:
     p = tomllib.loads((ROOT / "parameters.toml").read_text(encoding="utf-8"))
     for section in p.values():
@@ -362,6 +442,7 @@ def main() -> None:
     )
     write_xml(ROOT / "models" / "tractor" / "model.config", config)
     write_xml(ROOT / "worlds" / "tractor_field.sdf", create_world())
+    write_xml(ROOT / "worlds" / "tractor_obstacles.sdf", create_obstacle_world())
     (ROOT / "cad_dimensions.json").write_text(
         json.dumps(g, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",

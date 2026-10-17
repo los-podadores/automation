@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import signal
@@ -49,6 +50,9 @@ class GazeboCommands:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Teclado del tractor")
+    parser.add_argument("--obstacles", action="store_true")
+    args = parser.parse_args()
     try:
         import tkinter as tk
         from tkinter import ttk
@@ -73,6 +77,15 @@ def main() -> int:
         print(f"No se puede abrir el panel gráfico de WSLg: {exc}", file=sys.stderr)
         return 1
     root.title("Los Podadores · Teclado del tractor")
+    scenario = observer = guard = None
+    if args.obstacles:
+        from obstacle_runtime import CrossingScenario, SceneObserver
+        from obstacles import ObstacleGuard
+
+        observer = SceneObserver(rear_radius=g["rear"]["wheel_radius_m"])
+        guard = ObstacleGuard(g)
+        scenario = CrossingScenario(observer)
+        scenario.start()
     root.resizable(False, False)
     panel = ttk.Frame(root, padding=20)
     panel.grid()
@@ -94,6 +107,10 @@ def main() -> int:
     ttk.Label(panel, text="Valores mostrados: órdenes, no mediciones reales.").grid(
         pady=(0, 12)
     )
+    if args.obstacles:
+        ttk.Label(panel, text="Persona/perro simulados · Parada asistida activa").grid(
+            pady=8
+        )
 
     armed = False
     exit_code = 0
@@ -144,6 +161,22 @@ def main() -> int:
         if elapsed > 0.5:
             disarm()  # Require re-arming after a stalled GUI/event loop.
         speed, angle, yaw_rate = drive.step(max(elapsed, 1e-6))
+        if armed and guard is not None:
+            vehicle, observations, fresh = observer.snapshot()
+            intended_speed = (
+                p["forward_speed_mps"] if speed >= 0 else -p["reverse_speed_mps"]
+            )
+            decision = guard.decide(
+                vehicle,
+                observations,
+                intended_speed,
+                angle,
+                now,
+                fresh and not scenario.error,
+            )
+            status.set(f"{decision.state} · {decision.reason}")
+            if not decision.allowed:
+                drive.speed = speed = yaw_rate = 0.0
         commands.publish(speed, angle, yaw_rate)
         values.set(f"Orden: {speed:+.2f} m/s · Dirección: {math.degrees(angle):+.1f}°")
         root.after(max(1, round(1000 / p["publish_hz"])), tick)
@@ -168,6 +201,8 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if scenario is not None:
+            scenario.close()
         # Let the final zero messages leave the native transport publisher.
         for _ in range(3):
             try:

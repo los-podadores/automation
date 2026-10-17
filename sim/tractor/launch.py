@@ -12,13 +12,16 @@ import sys
 from build_model import ROOT, main as build
 
 
-def simulation_environment() -> dict[str, str]:
+def simulation_environment(obstacles: bool = False) -> dict[str, str]:
     env = os.environ.copy()
     existing = env.get("GZ_SIM_RESOURCE_PATH", "")
     env["GZ_SIM_RESOURCE_PATH"] = str(ROOT / "models") + (
         os.pathsep + existing if existing else ""
     )
-    env.setdefault("GZ_PARTITION", "los-podadores-tractor")
+    env.setdefault(
+        "GZ_PARTITION",
+        "los-podadores-tractor-obstacles" if obstacles else "los-podadores-tractor",
+    )
     return env
 
 
@@ -77,7 +80,16 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true", help="Comprueba instalación sin abrir ventanas"
     )
+    parser.add_argument(
+        "--obstacles",
+        action="store_true",
+        help="Persona/perro móviles y asistencia de parada",
+    )
+    parser.add_argument(
+        "--demo", action="store_true", help="Prueba corta autónoma ante persona y perro"
+    )
     args = parser.parse_args()
+    args.obstacles = args.obstacles or args.demo
     try:
         build()
         check_runtime(args.headless)
@@ -87,8 +99,13 @@ def main() -> int:
     if args.check:
         print("Gazebo Harmonic y Python del sistema disponibles.")
         return 0
-    env = simulation_environment()
-    for path in (ROOT / "models/tractor/model.sdf", ROOT / "worlds/tractor_field.sdf"):
+    env = simulation_environment(args.obstacles)
+    world_path = (
+        ROOT
+        / "worlds"
+        / ("tractor_obstacles.sdf" if args.obstacles else "tractor_field.sdf")
+    )
+    for path in (ROOT / "models/tractor/model.sdf", world_path):
         result = subprocess.run(
             ["gz", "sdf", "-k", str(path)], env=env, cwd=ROOT / "worlds"
         )
@@ -97,17 +114,23 @@ def main() -> int:
     command = ["gz", "sim", "-r", "-v", "3"]
     if args.headless:
         command.append("-s")
-    command.append(str(ROOT / "worlds/tractor_field.sdf"))
+    command.append(str(world_path))
     gazebo = subprocess.Popen(
         command, env=env, cwd=ROOT / "worlds", start_new_session=True
     )
     keyboard = None
     try:
-        if args.headless:
+        if args.headless and not args.demo:
             return gazebo.wait()
-        keyboard = subprocess.Popen(
-            [sys.executable, str(ROOT / "teleop.py")], env=env, start_new_session=True
-        )
+        controller = [
+            sys.executable,
+            str(ROOT / ("demo.py" if args.demo else "teleop.py")),
+        ]
+        if args.demo and args.headless:
+            controller.append("--headless")
+        elif args.obstacles and not args.demo:
+            controller.append("--obstacles")
+        keyboard = subprocess.Popen(controller, env=env, start_new_session=True)
         while gazebo.poll() is None and keyboard.poll() is None:
             try:
                 return_code = keyboard.wait(timeout=0.25)

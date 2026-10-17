@@ -102,7 +102,69 @@ un modelo de frenos reales ni un sistema de seguridad para hardware. Al salir
 normalmente se publica cero; si el proceso se mata forzosamente, Gazebo puede
 conservar la última orden. Cierra la simulación o envía cero desde otra terminal.
 
-## 4. Qué se tomó del CAD y qué falta calibrar
+## 4. Decisiones ante persona y perro
+
+Para observar una **prueba corta autónoma en 3D**, desde Ubuntu-24.04 en la repo:
+
+```bash
+bash sim/tractor/run.sh --demo
+```
+
+Desde PowerShell también puedes usar:
+
+```powershell
+.\sim\tractor\start_windows.ps1 -Demo
+```
+
+Pulsa **Iniciar prueba** en el panel. No hace falta mantener W: el tractor sigue
+una recta de prueba y una persona y un perro cruzan sucesivamente. El panel muestra:
+
+- **CONTINUAR:** el espacio previsto para el tractor está libre.
+- **FRENAR / ESPERAR:** hay un obstáculo en esa trayectoria; ordena detenerse.
+- **ESPERAR**, al despejarse: comprueba durante 0,8 s que el paso siga libre.
+- **SIN DATOS:** falta información actualizada; ordena detenerse.
+- **FINALIZADO:** alcanzó el final del tramo de prueba, a 10,5 m.
+
+El botón **DETENER** o Espacio interrumpe la marcha. Cierra el panel y vuelve a
+lanzar el comando para repetir el escenario desde el inicio. Para conducir con
+teclado y la misma asistencia de parada:
+
+```bash
+bash sim/tractor/run.sh --obstacles
+```
+
+Los cruces empiezan cuando el tractor alcanza posiciones definidas. La lógica
+comprueba el volumen completo del tractor a lo largo de su trayectoria prevista,
+incluidas curvas y marcha atrás. Usa un margen provisional de 0,65 m y velocidades
+bajas. Por ahora la decisión ante una persona o un perro es **parar, esperar y
+continuar**; todavía no planifica un desvío para rodearlos.
+
+**La percepción usa posiciones y etiquetas conocidas de Gazebo. No es YOLO ni
+reconocimiento de imágenes.** Las figuras son cuerpos geométricos móviles con
+colisiones, sin animación de marcha ni apariencia realista; no constituyen un
+dataset de entrenamiento visual. El adaptador observa únicamente los dos actores
+del escenario. Este modo no detecta automáticamente cualquier objeto añadido.
+Después se conectará una percepción basada en cámara y sensores, con estimación
+de distancias, para alimentar las decisiones con observaciones medidas.
+
+Esta recta corta comprueba los encuentros; **aún no representa el recorrido real
+de unos 110 m, la curva, la puerta ni el regreso**. Para construir ese escenario
+faltan el ancho útil de la puerta y el espacio disponible para girar. Tampoco es
+una validación de frenado o seguridad del tractor físico.
+
+El modo con obstáculos usa por defecto `GZ_PARTITION=los-podadores-tractor-obstacles`.
+Para ejecutar la prueba sin ventanas:
+
+```bash
+bash sim/tractor/run.sh --headless --demo
+```
+
+Guarda el resultado en `runs/tractor_demo/last_run.json`. El comando devuelve éxito
+solo si termina el tramo, registra paradas por ambos actores y mantiene el margen
+geométrico configurado. El informe incluye los cambios de decisión y la separación
+mínima observada; una ejecución exitosa no garantiza otros escenarios.
+
+## 5. Qué se tomó del CAD y qué falta calibrar
 
 `cad/TRACTOR.stp` es una copia del archivo original proporcionado. Se conservan
 su hash SHA-256 y las medidas extraídas en `cad_dimensions.json`.
@@ -133,7 +195,7 @@ con `yaw_rate = velocidad * tan(dirección) / distancia_entre_ejes`. Las ruedas
 delanteras ruedan libremente. Esto no convierte al vehículo en uno que gire
 sobre sí mismo ni supone que el tractor real tendrá dos motores de tracción.
 
-## 5. Regenerar y comprobar
+## 6. Regenerar y comprobar
 
 Para comprobar geometría, articulaciones, inercias y órdenes de movimiento sin
 tener Gazebo instalado:
@@ -151,7 +213,7 @@ uv run python -m unittest discover -s sim/tractor/tests -v
 ```
 
 Si `gz` está disponible, la suite también valida el modelo y el escenario con
-`gz sdf -k`; esas dos pruebas se omiten cuando Gazebo no está instalado.
+`gz sdf -k`; esas tres pruebas se omiten cuando Gazebo no está instalado.
 **Estas comprobaciones no prueban por sí solas que el motor físico, las
 colisiones y la interfaz gráfica funcionen en el equipo.** Después
 de instalar Gazebo, realiza la validación física con:

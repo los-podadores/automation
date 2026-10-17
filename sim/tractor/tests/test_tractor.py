@@ -16,9 +16,16 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from build_model import ROOT, create_model, create_world, load_parameters
+from build_model import (
+    ROOT,
+    create_model,
+    create_obstacle_world,
+    create_world,
+    load_parameters,
+)
 from control import KeyboardDrive
 from geometry import extract_geometry
+from obstacles import Observation, ObstacleGuard, VehicleState, straight_path_steering
 from teleop import GazeboCommands
 
 
@@ -121,7 +128,7 @@ class TractorModelTests(unittest.TestCase):
         self.assertEqual(ET.tostring(saved), ET.tostring(rebuilt))
 
     def test_unique_names_within_every_link(self):
-        for document in (self.model, create_world()):
+        for document in (self.model, create_world(), create_obstacle_world()):
             for link in document.iter("link"):
                 with self.subTest(link=link.attrib["name"]):
                     names = [
@@ -156,6 +163,75 @@ class GazeboValidationTests(unittest.TestCase):
 
     def test_world_is_accepted_by_gazebo(self):
         self.validate("worlds/tractor_field.sdf")
+
+    def test_obstacle_world_is_accepted_by_gazebo(self):
+        self.validate("worlds/tractor_obstacles.sdf")
+
+
+class ObstacleDecisionTests(unittest.TestCase):
+    def setUp(self):
+        self.guard = ObstacleGuard(extract_geometry(ROOT / "cad/TRACTOR.stp"))
+        self.vehicle = VehicleState(0, 0, 0, 0.6, 0)
+        self.person = Observation("person", "persona", 3, 0, 0.36)
+
+    def decide(self, observations, now=0, speed=0.6, steering=0, fresh=True):
+        return self.guard.decide(
+            self.vehicle, observations, speed, steering, now, fresh
+        )
+
+    def test_person_in_path_brakes_then_waits(self):
+        decision = self.decide([self.person])
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.state, "FRENAR")
+        self.vehicle = VehicleState(0, 0, 0, 0, 1)
+        self.assertEqual(self.decide([self.person]).state, "ESPERAR")
+
+    def test_side_obstacle_does_not_block_straight_path(self):
+        dog = Observation("dog", "perro", 3, 3, 0.65)
+        self.assertTrue(self.decide([dog]).allowed)
+
+    def test_unrecognised_class_in_path_also_blocks(self):
+        self.assertFalse(self.decide([Observation("box", "objeto", 3, 0, 0.2)]).allowed)
+
+    def test_reverse_checks_behind_vehicle(self):
+        rear = Observation("rear", "persona", -3, 0, 0.36)
+        self.assertTrue(self.decide([rear]).allowed)
+        self.assertFalse(self.decide([rear], speed=-0.35).allowed)
+
+    def test_turn_checks_swept_body_not_only_current_position(self):
+        obstacle = Observation("corner", "persona", 3, 2, 0.1)
+        self.assertTrue(self.decide([obstacle]).allowed)
+        self.assertFalse(self.decide([obstacle], steering=0.4).allowed)
+
+    def test_lost_perception_blocks_and_requires_clear_hold_after_recovery(self):
+        self.assertEqual(self.decide([], fresh=False).state, "SIN DATOS")
+        self.assertFalse(self.decide([], now=1).allowed)
+        self.assertTrue(self.decide([], now=1.81).allowed)
+        self.assertFalse(self.guard.decide(None, [], 0.6, 0, 2, True).allowed)
+
+    def test_reappearing_obstacle_resets_clear_hold(self):
+        self.decide([self.person])
+        self.assertFalse(self.decide([], now=1).allowed)
+        self.assertFalse(self.decide([], now=1.7).allowed)
+        self.decide([self.person], now=1.75)
+        self.assertFalse(self.decide([], now=2).allowed)
+        self.assertFalse(self.decide([], now=2.7).allowed)
+        self.assertTrue(self.decide([], now=2.81).allowed)
+
+    def test_invalid_observation_or_state_blocks(self):
+        for obs in (
+            Observation("bad", "perro", float("nan"), 0, 0.5),
+            Observation("bad", "perro", 0, 0, -1),
+        ):
+            with self.subTest(observation=obs):
+                self.assertEqual(self.decide([obs]).state, "SIN DATOS")
+        self.vehicle = VehicleState(float("inf"), 0, 0, 0, 0)
+        self.assertEqual(self.decide([]).state, "SIN DATOS")
+
+    def test_path_controller_corrects_toward_lane(self):
+        self.assertLess(straight_path_steering(VehicleState(0, 1, 0, 0, 0), 2), 0)
+        self.assertGreater(straight_path_steering(VehicleState(0, -1, 0, 0, 0), 2), 0)
+        self.assertEqual(straight_path_steering(VehicleState(0, 0, 0, 0, 0), 2), 0)
 
 
 class KeyboardTests(unittest.TestCase):
