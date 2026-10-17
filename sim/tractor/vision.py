@@ -1,14 +1,13 @@
-"""YOLO observer for Gazebo RGB-D, videos or a Windows webcam.
+"""YOLO perception for Gazebo RGB-D, videos or a Windows webcam.
 
-Uses the existing project model and Windows GPU. Never publishes drive commands
-or reads actor labels/poses. Driving remains controlled by the geometric demo.
+Uses the existing project model and Windows GPU, without reading actor labels.
+Only live Gazebo sessions can supply results to the optional braking interlock.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import threading
@@ -20,7 +19,7 @@ import cv2
 import numpy as np
 
 from camera_io import detection_depth, read_frame
-from session_control import OperatorClient
+from session_control import OperatorClient, read_json, write_json
 
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT.parents[1]
@@ -74,6 +73,19 @@ class VisionMonitor:
         )
         last_saved = 0.0
         try:
+            session_id = None
+            if getattr(self.args, "vision_brake", False):
+                session = read_json(self.args.frames_dir / "session.json")
+                if (
+                    source is not None
+                    or not session
+                    or not session.get("session_id")
+                    or session.get("vision_brake") is not True
+                ):
+                    raise RuntimeError(
+                        "La parada YOLO requiere la cámara de una sesión Gazebo"
+                    )
+                session_id = session["session_id"]
             is_photo = source is not None and Path(source).suffix.lower() in (
                 ".jpg",
                 ".jpeg",
@@ -164,8 +176,11 @@ class VisionMonitor:
                         )
                 self.processed += 1
                 result = dict(
-                    mode="monitor_only",
-                    control_source="Gazebo geometry; YOLO does not drive"
+                    mode="vision_brake" if session_id else "monitor_only",
+                    session_id=session_id,
+                    control_source="YOLO front-image stop plus Gazebo geometric backup"
+                    if session_id
+                    else "Gazebo geometry; YOLO does not drive"
                     if source is None
                     else "None; real media inference only",
                     source="Gazebo rendered RGB-D" if source is None else source,
@@ -177,12 +192,7 @@ class VisionMonitor:
                     inference_ms=(time.perf_counter() - started) * 1000,
                     detections=boxes,
                 )
-                temporary = self.output / "detections.pending.json"
-                temporary.write_text(
-                    json.dumps(result, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                os.replace(temporary, self.output / "detections.json")
+                write_json(self.output / "detections.json", result)
                 if time.monotonic() - last_saved >= 1 or self.processed == 1:
                     cv2.imwrite(str(self.output / "last_frame.jpg"), annotated)
                     last_saved = time.monotonic()
@@ -203,7 +213,9 @@ class VisionMonitor:
             (self.output / "summary.json").write_text(
                 json.dumps(
                     dict(
-                        mode="monitor_only",
+                        mode="vision_brake"
+                        if getattr(self.args, "vision_brake", False)
+                        else "monitor_only",
                         processed_frames=self.processed,
                         detections_by_class=self.counts,
                         error=self.error,
@@ -221,6 +233,10 @@ def launch_gazebo(args):
     session = uuid.uuid4().hex[:12]
     args.frames_dir = PROJECT / "runs/tractor_camera" / session
     args.frames_dir.mkdir(parents=True)
+    write_json(
+        args.frames_dir / "session.json",
+        dict(session_id=session, vision_brake=getattr(args, "vision_brake", False)),
+    )
     linux = subprocess.run(
         [
             "wsl.exe",
@@ -267,6 +283,8 @@ def launch_gazebo(args):
         ]
         if args.headless:
             command.append("--headless")
+        if getattr(args, "vision_brake", False):
+            command.append("--vision-brake")
         process = subprocess.Popen(
             command,
             stdout=log,
@@ -297,14 +315,16 @@ def show_window(monitor, simulation):
     ).grid(pady=6)
     ttk.Label(
         panel,
-        text="La conducción y la parada siguen usando la geometría de Gazebo."
+        text="PARADA ACTIVA: persona o perro en cámara → frenar; 1,2 s sin detecciones → reanudar."
+        if getattr(monitor.args, "vision_brake", False)
+        else "La conducción y la parada siguen usando la geometría de Gazebo."
         if monitor.args.source is None
         else f"Fuente real: {Path(monitor.args.source).name if not monitor.args.source.isdecimal() else 'cámara ' + monitor.args.source}",
         wraplength=750,
     ).grid()
     ttk.Label(
         panel,
-        text="YOLO aún no está validado con las figuras geométricas de esta escena."
+        text="Respaldo geométrico activo: YOLO aún reconoce mal las figuras simplificadas de Gazebo."
         if monitor.args.source is None
         else "No detectar algo no significa que el camino esté libre.",
     ).grid(pady=4)
@@ -456,7 +476,7 @@ def show_window(monitor, simulation):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Cámara y YOLO del tractor; solo observación"
+        description="Cámara y YOLO del tractor; parada opcional en simulación"
     )
     parser.add_argument(
         "--launch",
@@ -464,6 +484,11 @@ def main():
         help="Abre Gazebo en WSL y el visor con GPU de Windows",
     )
     parser.add_argument("--distribution", default="Ubuntu-24.04")
+    parser.add_argument(
+        "--vision-brake",
+        action="store_true",
+        help="Frena con Person/Dog en la cámara Gazebo de esta sesión; nunca con video grabado",
+    )
     parser.add_argument(
         "--frames-dir", type=Path, default=PROJECT / "runs/tractor_camera/live"
     )
@@ -533,6 +558,10 @@ def main():
         parser.error("--start-seconds requiere un archivo de video en --source")
     if args.launch and args.source is not None:
         parser.error("Usa --launch para Gazebo o --source para video/cámara real")
+    if args.vision_brake and (args.source is not None or args.output_dir is not None):
+        parser.error(
+            "--vision-brake usa solo la cámara Gazebo y su --frames-dir; sin --source ni --output-dir"
+        )
     simulation = None
     try:
         # Verify weights/dependencies before opening a simulation.

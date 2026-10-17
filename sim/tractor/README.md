@@ -221,9 +221,10 @@ accesos y maniobra de retorno. No cabe suponer que una curva de 5 m de longitud
 baste para girar este tractor: el programa comprueba el radio y el ancho libre
 contra la geometría y el margen configurado.
 
-La percepción y localización siguen usando la verdad conocida de Gazebo; no se ha
-conectado YOLO ni entrenado una política de conducción. El control sigue una ruta
-geométrica con realimentación de la pose física. Cerco y árboles tienen colisiones,
+El recorrido sin cámara usa percepción y localización conocidas de Gazebo.
+La sección 6 añade parada por YOLO con `--vision-brake`; no se ha entrenado una
+política de conducción. El control sigue una ruta geométrica con realimentación
+de la pose física. Cerco y árboles tienen colisiones,
 pero la percepción de este escenario observa los cuatro actores y la puerta;
 no es un detector general de obstáculos añadidos. Si pierde datos, supera la
 desviación lateral permitida o pierde el margen de separación, ordena parar.
@@ -270,7 +271,7 @@ Cierra el panel y Gazebo anteriores. Si estás dentro de Ubuntu, `exit` vuelve a
 PowerShell. Desde la carpeta `automation`:
 
 ```powershell
-.\.venv\Scripts\python.exe sim/tractor/vision.py --launch
+.\.venv\Scripts\python.exe sim/tractor/vision.py --launch --vision-brake
 ```
 
 También existe el acceso directo:
@@ -307,12 +308,40 @@ no necesitas cambiar la política de Windows.
 
 ### Qué controla realmente al tractor
 
-**YOLO observa; todavía no controla la marcha ni autoriza el paso.** La parada del
-recorrido continúa usando los actores y la puerta conocidos de Gazebo. El visor
-no se suscribe a esas etiquetas ni a sus posiciones: sus detecciones salen de
-las imágenes. Las salidas incluyen `mode: monitor_only` y no se conectan a los
-topics de dirección o tracción. Un fotograma sin detecciones no demuestra que
-el camino esté libre; el visor marca la imagen como desactualizada si deja de llegar.
+Con **`--vision-brake`**, el controlador del recorrido consume las detecciones
+reales de YOLO sobre la cámara frontal de **esa misma sesión**. También se activa
+al usar `start_vision.ps1`. La dirección sigue la ruta; YOLO añade una condición
+de parada, sin publicar directamente a los motores:
+
+- Persona o perro en cualquier parte de la imagen frontal: **FRENAR YOLO**, orden
+  de velocidad cero. Esta primera política es conservadora: también frena por
+  personas al costado; todavía no calcula si el recuadro invade la trayectoria.
+- Desaparece la detección: **ESPERAR YOLO** durante **1,2 segundos** y al menos tres
+  fotogramas distintos sin detecciones. Una sola omisión del detector no reanuda.
+- Paso sin detecciones durante esa espera y respaldo geométrico libre: reanuda
+  automáticamente, con la aceleración limitada del controlador.
+- Imágenes atrasadas más de **0,8 s simulados**, resultados congelados más de
+  **1 s real**, datos inválidos o YOLO cerrado: **SIN YOLO**, tractor detenido.
+  Al recuperar imágenes actuales repite la espera antes de reanudar.
+- **DETENER / Espacio** mantiene prioridad. La parada manual o pérdida del visor
+  requiere un nuevo **Iniciar**; las detecciones no pueden habilitar la marcha.
+
+El respaldo de posiciones conocidas de Gazebo sigue frenando ante los actores,
+la puerta y los obstáculos fuera de cámara. Un resultado YOLO vacío **no anula**
+ese respaldo. El visor no lee etiquetas ni posiciones de los actores. Las cajas
+de YOLO salen de las imágenes; la profundidad de ROI continúa siendo informativa,
+sin utilizarla para estimar una distancia segura de frenado.
+
+`session.json` identifica cada sesión y `detections.json` declara
+`mode: vision_brake`, origen, secuencia y tiempo de captura. El controlador
+rechaza resultados de otra sesión, videos/fotos, secuencias repetidas que intenten
+renovar la conexión y capturas antiguas. La caducidad de recepción usa un reloj
+monótono local; no compara la hora de Windows con la de WSL.
+
+Sin `--vision-brake`, YOLO conserva el modo de observación `monitor_only`.
+`--source` y `--select-source` siguen siendo pruebas del detector: **no pueden
+frenar un tractor que ve una escena distinta**. No se admite combinarlos con
+`--vision-brake`. Usa una sesión nueva al cambiar el modo.
 
 El modelo ya detectó personas en el video real `PODADORAS.mp4` y un perro en una
 imagen del conjunto de prueba ROD. **Los actores actuales del simulador son
@@ -321,9 +350,11 @@ captura probada, el perro geométrico no fue detectado. La conexión cámara →
 funciona, pero todavía falta validar reconocimiento fiable dentro del simulador
 con actores realistas o entrenamiento adicional con imágenes simuladas.
 
-Antes de usar visión para frenar: validar personas/perros en distintos tamaños,
-poses y luces; comprobar distancias; añadir seguimiento temporal y cubrir los
-obstáculos que quedan fuera de la cámara frontal. La puerta y otros objetos no
+Esta parada se conecta únicamente al **tractor simulado**. Para depender del
+reconocimiento visual falta validar personas/perros en distintos tamaños,
+poses y luces, medir los falsos negativos y calibrar distancia y frenado reales.
+Enviar velocidad cero en Gazebo no valida el freno del tractor físico.
+La puerta y otros objetos no
 se vuelven detectables automáticamente por filtrar solo Person/Dog. La cámara
 RGB-D virtual es una elección para experimentar, no una compra de sensor ya decidida.
 
@@ -407,6 +438,19 @@ sin ventanas:
 ```powershell
 .\.venv\Scripts\python.exe sim/tractor/vision.py --launch --headless --max-frames 5 --timeout 40
 ```
+
+Para verificar el interbloqueo con física de Gazebo, sin ventanas:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/tests/validate_vision_gazebo.py
+```
+
+La prueba ejecuta primero YOLO real sobre la cámara. Después usa paquetes
+**sintéticos de prueba, identificados como tales**, para comprobar parada por
+persona/perro, espera antes de reanudar, resultados congelados y prioridad de la
+parada manual. Guarda `brake_validation.json` en su propia sesión. La prueba del
+adaptador no demuestra que YOLO reconozca las figuras geométricas del escenario.
+Las pruebas de política sin Gazebo están en `tests/test_vision_brake.py`.
 
 ## 7. Qué se tomó del CAD y qué falta calibrar
 

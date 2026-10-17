@@ -104,7 +104,12 @@ def main() -> int:
     parser.add_argument(
         "--camera",
         action="store_true",
-        help="Activa cámara RGB-D; YOLO se ejecuta aparte como observador",
+        help="Activa cámara RGB-D; YOLO se ejecuta en Windows",
+    )
+    parser.add_argument(
+        "--vision-brake",
+        action="store_true",
+        help="Parada por YOLO con respaldo geométrico",
     )
     parser.add_argument(
         "--frames-dir", type=Path, default=ROOT.parents[1] / "runs/tractor_camera/live"
@@ -124,6 +129,8 @@ def main() -> int:
         parser.error("Usa --route solo; ya incluye persona y perro en ambos sentidos")
     if args.camera and not args.route:
         parser.error("--camera requiere --route")
+    if args.vision_brake and not args.camera:
+        parser.error("--vision-brake requiere --camera")
     args.obstacles = args.obstacles or args.demo
     try:
         build()
@@ -211,6 +218,8 @@ def main() -> int:
             # Camera sessions use the Windows visor as their sole control panel.
             # Do not depend on a second WSLg Tk window appearing on the desktop.
             controller.extend(["--control-dir", str(args.frames_dir)])
+        if args.vision_brake:
+            controller.append("--vision-brake")
         if (args.demo or args.route) and args.headless:
             controller.append("--headless")
         elif args.obstacles and not args.demo:

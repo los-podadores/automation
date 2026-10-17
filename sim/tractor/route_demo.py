@@ -18,7 +18,8 @@ from teleop import GazeboCommands
 
 
 class RouteDemo:
-    def __init__(self):
+    def __init__(self, vision_brake=None):
+        self.vision_brake = vision_brake
         self.geometry = json.loads(
             (ROOT / "cad_dimensions.json").read_text(encoding="utf-8")
         )
@@ -184,6 +185,10 @@ class RouteDemo:
                     sim_time,
                     fresh and not self.scenario.error,
                 )
+                if self.vision_brake is not None:
+                    vision_decision = self.vision_brake.poll(sim_time)
+                    if not vision_decision.allowed:
+                        decision = vision_decision
             if (
                 decision.obstacle in self.crossers
                 and decision.state == "ESPERAR"
@@ -236,7 +241,9 @@ class RouteDemo:
             and heading_error < 0.15
         )
         return dict(
-            perception="Gazebo labelled ground truth; not YOLO",
+            perception="YOLO front-image stop plus Gazebo geometric backup"
+            if self.vision_brake is not None
+            else "Gazebo labelled ground truth; not YOLO",
             layout="Provisional except approximate 110 m straight",
             config=self.config,
             finished=self.finished,
@@ -279,6 +286,7 @@ def main():
         description="Recorrido de 110 m, curva, puerta y regreso"
     )
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--vision-brake", action="store_true")
     parser.add_argument(
         "--control-dir",
         type=Path,
@@ -296,7 +304,22 @@ def main():
         parser.error("--time-scale debe estar entre 1 y 4")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout debe ser finito y positivo")
-    demo = RouteDemo()
+    vision_brake = None
+    if args.vision_brake:
+        from session_control import read_json
+        from vision_brake import VisionBrake
+
+        session = (
+            read_json(args.control_dir / "session.json") if args.control_dir else None
+        )
+        if (
+            not session
+            or not session.get("session_id")
+            or session.get("vision_brake") is not True
+        ):
+            parser.error("--vision-brake requiere --control-dir con session.json")
+        vision_brake = VisionBrake(args.control_dir, session["session_id"])
+    demo = RouteDemo(vision_brake)
     try:
         if args.control_dir is not None:
             from session_control import RouteOperator
