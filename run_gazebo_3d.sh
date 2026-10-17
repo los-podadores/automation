@@ -24,18 +24,19 @@ print(f'  Track exported to {sdf_p} ({len(track.wall_segments)} walls, {len(trac
 
 echo "[2/2] Launching Gazebo Harmonic 3D window and Teleoperation HUD..."
 nix develop .#ros-desktop -c bash -c "
+  export GZ_IP=127.0.0.1
   export GZ_SIM_RESOURCE_PATH=\"$DIR/src/v2/model:\$GZ_SIM_RESOURCE_PATH\"
-  echo '  Starting Gazebo 3D GUI server...'
-  gz sim -r \"$DIR/src/v2/model/procedural_track.sdf\" &
+  echo '  Starting Gazebo 3D simulation server on 127.0.0.1...'
+  gz sim -s -r \"$DIR/src/v2/model/procedural_track.sdf\" &
   GZ_PID=\$!
 
   # Wait for Gazebo server to establish topics
-  sleep 2.5
+  sleep 2.0
 
-  echo '  Starting Teleoperation HUD with keyboard control...'
-  uv run src/sim/teleop.py --backend gazebo
+  echo '  Starting Teleoperation HUD with keyboard control (streaming to /cmd_vel)...'
+  env -u PYTHONPATH uv run src/sim/teleop.py --backend gazebo
 
-  echo '  Shutting down Gazebo...'
+  echo '  Shutting down Gazebo server...'
   kill \$GZ_PID 2>/dev/null || true
   wait \$GZ_PID 2>/dev/null || true
 "

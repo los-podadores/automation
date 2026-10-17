@@ -145,12 +145,17 @@
 
         devShells.ros-desktop = pkgs.mkShell {
           name = "ros2-jazzy-desktop";
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath libs;
+          LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath libs}:/run/opengl-driver/lib";
           packages = [
             colconPkg
             rosDesktopEnvJazzy
           ];
           buildInputs = [ pkgs.bashInteractive ];
+          shellHook = ''
+            export GZ_IP=127.0.0.1
+            export GZ_SIM_RESOURCE_PATH="$PWD/src/v2/model:''${GZ_SIM_RESOURCE_PATH:-}"
+            unset PYTHONPATH
+          '';
         };
 
         devShells.ros-humble = pkgs.mkShell {

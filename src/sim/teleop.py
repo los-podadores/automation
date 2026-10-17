@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -97,12 +98,14 @@ class GazeboBridge:
         self.cmd_angular_z = steer_rad
 
     def _publish_loop(self) -> None:
+        gz_env = dict(os.environ)
+        gz_env["GZ_IP"] = "127.0.0.1"
         while self.running:
             if self.connected:
                 msg = f"linear: {{x: {self.cmd_linear_x:.3f}}}, angular: {{z: {self.cmd_angular_z:.3f}}}"
                 cmd = [self.gz_bin, "topic", "-t", "/cmd_vel", "-m", "gz.msgs.Twist", "-p", msg]
                 try:
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.15)
+                    subprocess.run(cmd, env=gz_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.15)
                 except Exception:
                     pass
             time.sleep(0.05)
