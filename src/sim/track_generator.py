@@ -685,7 +685,74 @@ class ProceduralTrack:
             else:
                 color_xml = "<ambient>0.90 0.60 0.10 1.0</ambient><diffuse>0.95 0.65 0.15 1.0</diffuse>"
 
-            obs_xml = f"""
+            if obs.is_dynamic:
+                speed = math.hypot(obs.world_vx, obs.world_vy)
+                if speed > 1e-4:
+                    dir_x = obs.world_vx / speed
+                    dir_y = obs.world_vy / speed
+                else:
+                    dir_x = math.cos(obs.yaw)
+                    dir_y = math.sin(obs.yaw)
+                wp1_x = obs.origin_x
+                wp1_y = obs.origin_y
+                wp2_x = obs.origin_x + dir_x * obs.patrol_distance
+                wp2_y = obs.origin_y + dir_y * obs.patrol_distance
+
+                obs_xml = f"""
+    <!-- Dynamic Obstacle {i}: {obs.name} -->
+    <model name="obstacle_{i}">
+      <pose>{obs.world_x:.3f} {obs.world_y:.3f} {oz:.3f} 0 0 {obs.yaw:.4f}</pose>
+      <link name="link">
+        <gravity>false</gravity>
+        <inertial>
+          <mass>50.0</mass>
+          <inertia>
+            <ixx>1.0</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>1.0</iyy><iyz>0</iyz>
+            <izz>1.0</izz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>{geom_xml}</geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>0.01</mu>
+                <mu2>0.01</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>{geom_xml}</geometry>
+          <material>{color_xml}</material>
+        </visual>
+      </link>
+      <plugin
+        filename="gz-sim-trajectory-follower-system"
+        name="gz::sim::systems::TrajectoryFollower">
+        <link_name>link</link_name>
+        <loop>true</loop>
+        <force>120</force>
+        <torque>20</torque>
+        <range_tolerance>0.3</range_tolerance>
+        <waypoints>
+          <waypoint>{wp1_x:.3f} {wp1_y:.3f}</waypoint>
+          <waypoint>{wp2_x:.3f} {wp2_y:.3f}</waypoint>
+        </waypoints>
+      </plugin>
+      <plugin
+        filename="gz-sim-odometry-publisher-system"
+        name="gz::sim::systems::OdometryPublisher">
+        <odom_frame>world</odom_frame>
+        <robot_base_frame>obstacle_{i}/link</robot_base_frame>
+        <odom_topic>/model/obstacle_{i}/odometry</odom_topic>
+        <odom_publish_frequency>20</odom_publish_frequency>
+        <dimensions>2</dimensions>
+      </plugin>
+    </model>"""
+            else:
+                obs_xml = f"""
     <!-- Obstacle {i}: {obs.name} -->
     <model name="obstacle_{i}">
       <static>true</static>
@@ -717,6 +784,7 @@ class ProceduralTrack:
     <plugin name="gz::sim::systems::Physics" filename="gz-sim-physics-system"/>
     <plugin name="gz::sim::systems::UserCommands" filename="gz-sim-user-commands-system"/>
     <plugin name="gz::sim::systems::SceneBroadcaster" filename="gz-sim-scene-broadcaster-system"/>
+    <plugin name="gz::sim::systems::Contact" filename="gz-sim-contact-system"/>
     <plugin name="gz::sim::systems::Sensors" filename="gz-sim-sensors-system">
       <render_engine>ogre2</render_engine>
     </plugin>

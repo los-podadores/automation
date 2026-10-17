@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,7 +16,9 @@ from src.sim.track_generator import ProceduralTrackGenerator
 class TestTrackSynchronization(unittest.TestCase):
     def setUp(self) -> None:
         self.gen = ProceduralTrackGenerator(default_road_width=7.0)
-        self.track = self.gen.generate_track(seed=123, length=50.0, road_width=7.0, num_obstacles=3)
+        self.track = self.gen.generate_track(
+            seed=123, length=50.0, road_width=7.0, num_obstacles=3
+        )
 
     def test_json_export_and_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -30,8 +33,12 @@ class TestTrackSynchronization(unittest.TestCase):
             self.assertEqual(loaded.road_width, self.track.road_width)
             self.assertEqual(len(loaded.wall_segments), len(self.track.wall_segments))
             self.assertEqual(len(loaded.obstacles), len(self.track.obstacles))
-            np.testing.assert_allclose(loaded.waypoints_forward, self.track.waypoints_forward)
-            np.testing.assert_allclose(loaded.waypoints_reverse, self.track.waypoints_reverse)
+            np.testing.assert_allclose(
+                loaded.waypoints_forward, self.track.waypoints_forward
+            )
+            np.testing.assert_allclose(
+                loaded.waypoints_reverse, self.track.waypoints_reverse
+            )
 
     def test_env_loads_synchronized_track(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -74,3 +81,50 @@ class TestTrackSynchronization(unittest.TestCase):
             else:
                 target_speed = throttle_cmd * 1.0
         self.assertEqual(target_speed, 0.0)
+
+    def test_sdf_dynamic_obstacles_and_contact_plugin(self) -> None:
+        """Verify dynamic obstacles have TrajectoryFollower, OdometryPublisher, and world has Contact plugin."""
+        track = self.gen.generate_demo_90deg(seed=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sdf_path = Path(tmpdir) / "test_track.sdf"
+            track.export_gazebo_sdf(sdf_path)
+            content = sdf_path.read_text(encoding="utf-8")
+
+            self.assertIn("gz-sim-contact-system", content)
+            self.assertIn("gz-sim-trajectory-follower-system", content)
+            self.assertIn("gz-sim-odometry-publisher-system", content)
+
+    def test_tractor_sdf_contact_sensor_and_chassis_collision(self) -> None:
+        """Verify tractor model SDF has chassis_body_collision and tractor_contact_sensor."""
+        tractor_sdf_path = Path("src/v2/model/tractor/model.sdf")
+        content = tractor_sdf_path.read_text(encoding="utf-8")
+        self.assertIn("chassis_body_collision", content)
+        self.assertIn("tractor_contact_sensor", content)
+        self.assertIn("/model/tractor/contacts", content)
+
+    def test_bridge_config_contacts_and_obstacle_odometry(self) -> None:
+        """Verify bridge_config.yaml contains tractor contacts and obstacle odometry."""
+        bridge_yaml_path = Path("src/v2/bridge_config.yaml")
+        content = bridge_yaml_path.read_text(encoding="utf-8")
+        self.assertIn("/model/tractor/contacts", content)
+        self.assertIn("ros_gz_interfaces/msg/Contacts", content)
+        self.assertIn("/model/obstacle_0/odometry", content)
+
+    def test_multi_circle_wall_collision_detection(self) -> None:
+        """Verify multi-circle collision check catches corner overlaps that single circle misses."""
+        track = self.gen.generate_demo_90deg(seed=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "track.json"
+            track.export_json(json_path)
+            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
+            env.reset(options={"track": track})
+
+            # Position car near a wall where center is >1.15m away but front bumper hits
+            # Road width is 7.0m, wall is at y = 3.5m. Center at y = 2.2m (dist=1.3m > 1.15m)
+            # With car_yaw = 60 degrees, front reaches y = 2.2 + 0.8 * sin(60 deg) = 2.2 + 0.69 = 2.89m
+            # Distance from front center (2.89) to wall (3.5) is 0.61m < 0.85m -> COLLISION!
+            env.car_x = 10.0
+            env.car_y = 2.2
+            env.car_yaw = math.radians(60.0)
+
+            self.assertTrue(env._check_wall_collision())

@@ -51,6 +51,13 @@ class Ros2GazeboBridge:
         self.LaserScan = LaserScan
         self.Float64 = Float64
 
+        try:
+            from ros_gz_interfaces.msg import Contacts
+
+            self.Contacts: Any | None = Contacts
+        except ImportError:
+            self.Contacts = None
+
         if not self.rclpy.ok():
             self.rclpy.init()
 
@@ -60,6 +67,8 @@ class Ros2GazeboBridge:
         # Cached state from Gazebo
         self.latest_scans: dict[str, LaserScanData] = {}
         self.latest_odom: dict[str, float] | None = None
+        self.latest_collision: bool = False
+        self.obstacle_states: dict[int, dict[str, float]] = {}
         self.last_scan_time: float = 0.0
 
         # Subscriptions: 4 LiDAR Pods
@@ -84,10 +93,32 @@ class Ros2GazeboBridge:
             Odometry, "/model/tractor/wheel_odometry", self._on_wheel_odom, 10
         )
 
+        # Subscription: Tractor Contacts (Gazebo Harmonic Ground Truth)
+        if self.Contacts is not None:
+            self.sub_contacts = self.node.create_subscription(
+                self.Contacts, "/model/tractor/contacts", self._on_contacts, 10
+            )
+
+        # Subscriptions: Dynamic Obstacle Odometry
+        self.sub_obstacle_odoms = []
+        for i in range(6):
+            topic = f"/model/obstacle_{i}/odometry"
+            sub = self.node.create_subscription(
+                Odometry,
+                topic,
+                (lambda idx: lambda m: self._on_obstacle_odom(idx, m))(i),
+                10,
+            )
+            self.sub_obstacle_odoms.append(sub)
+
         # Publishers: Commands
         self.pub_cmd_vel = self.node.create_publisher(Twist, "/cmd_vel", 10)
-        self.pub_steer = self.node.create_publisher(Float64, "/model/tractor/steering_angle", 10)
-        self.pub_drive = self.node.create_publisher(Twist, "/model/tractor/rear_axle/cmd_vel", 10)
+        self.pub_steer = self.node.create_publisher(
+            Float64, "/model/tractor/steering_angle", 10
+        )
+        self.pub_drive = self.node.create_publisher(
+            Twist, "/model/tractor/rear_axle/cmd_vel", 10
+        )
 
         self.has_world_odom: bool = False
 
@@ -167,6 +198,41 @@ class Ros2GazeboBridge:
         """Process incoming ROS 2 events (handled asynchronously by background executor)."""
         # Kept for interface compatibility; spinning is handled continuously by self._executor
         pass
+
+    def _on_contacts(self, msg: Any) -> None:
+        """Handle live contact collision reports from Gazebo Harmonic Contact system."""
+        is_colliding = False
+        if hasattr(msg, "contacts") and len(msg.contacts) > 0:
+            for c in msg.contacts:
+                c1 = getattr(c.collision1, "name", "").lower()
+                c2 = getattr(c.collision2, "name", "").lower()
+                if "ground_plane" not in c1 and "ground_plane" not in c2:
+                    is_colliding = True
+                    break
+        with self.lock:
+            self.latest_collision = is_colliding
+
+    def _on_obstacle_odom(self, idx: int, msg: Any) -> None:
+        """Track true physical pose of dynamic obstacle from Gazebo Harmonic."""
+        pos = msg.pose.pose.position
+        twist = msg.twist.twist
+        with self.lock:
+            self.obstacle_states[idx] = {
+                "x": float(pos.x),
+                "y": float(pos.y),
+                "vx": float(twist.linear.x),
+                "vy": float(twist.linear.y),
+            }
+
+    def get_collision(self) -> bool:
+        """Thread-safe query of Gazebo Harmonic collision state."""
+        with self.lock:
+            return self.latest_collision
+
+    def get_obstacle_states(self) -> dict[int, dict[str, float]]:
+        """Thread-safe snapshot of all active dynamic obstacle positions in Gazebo."""
+        with self.lock:
+            return dict(self.obstacle_states)
 
     def get_state(self) -> tuple[dict[str, float] | None, dict[str, LaserScanData]]:
         """Retrieve latest thread-safe snapshot of odometry and 4-pod scans."""

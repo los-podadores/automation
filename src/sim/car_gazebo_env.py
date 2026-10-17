@@ -16,7 +16,6 @@ import numpy as np
 import gymnasium as gym
 
 from src.translate.config import (
-    COLLISION_RADIUS,
     DT_SECONDS,
     MAX_ACCEL_MPSS,
     MAX_BRAKE_MPSS,
@@ -216,12 +215,21 @@ class CarGazeboEnv(gym.Env):
         return ego_walls
 
     def _check_wall_collision(self) -> bool:
-        """Check if vehicle circle overlaps any wall line segment."""
+        """Check if multi-circle vehicle footprint overlaps any wall line segment."""
         if not self.track:
             return False
 
         cx, cy = self.car_x, self.car_y
-        r_sq = COLLISION_RADIUS**2
+        cos_yaw = math.cos(self.car_yaw)
+        sin_yaw = math.sin(self.car_yaw)
+
+        # 3 overlapping bounding circles covering 3.0m x 1.67m tractor footprint
+        centers = [
+            (cx + 0.8 * cos_yaw, cy + 0.8 * sin_yaw),
+            (cx, cy),
+            (cx - 0.8 * cos_yaw, cy - 0.8 * sin_yaw),
+        ]
+        r_sq = 0.85**2
 
         for (x1, y1), (x2, y2) in self.track.wall_segments:
             dx = x2 - x1
@@ -230,14 +238,14 @@ class CarGazeboEnv(gym.Env):
             if seg_len_sq < 1e-4:
                 continue
 
-            # Projection factor t of vehicle onto line segment
-            t = max(0.0, min(1.0, ((cx - x1) * dx + (cy - y1) * dy) / seg_len_sq))
-            closest_x = x1 + t * dx
-            closest_y = y1 + t * dy
+            for ccx, ccy in centers:
+                t = max(0.0, min(1.0, ((ccx - x1) * dx + (ccy - y1) * dy) / seg_len_sq))
+                closest_x = x1 + t * dx
+                closest_y = y1 + t * dy
 
-            dist_sq = (cx - closest_x) ** 2 + (cy - closest_y) ** 2
-            if dist_sq < r_sq:
-                return True
+                dist_sq = (ccx - closest_x) ** 2 + (ccy - closest_y) ** 2
+                if dist_sq < r_sq:
+                    return True
 
         return False
 
@@ -445,21 +453,50 @@ class CarGazeboEnv(gym.Env):
             self.car_y += self.car_vx * math.sin(self.car_yaw) * DT_SECONDS
 
         # 4. Update Dynamic Obstacles
-        if self.track:
-            for obs in self.track.obstacles:
-                obs.step(DT_SECONDS)
+        if self.sim_mode == "gazebo" and self.ros_bridge is not None:
+            # Synchronize true obstacle states from Gazebo Harmonic
+            obs_states = self.ros_bridge.get_obstacle_states()
+            if self.track:
+                for i, obs in enumerate(self.track.obstacles):
+                    if obs.is_dynamic and i in obs_states:
+                        st = obs_states[i]
+                        obs.world_x = st["x"]
+                        obs.world_y = st["y"]
+                        obs.world_vx = st["vx"]
+                        obs.world_vy = st["vy"]
+                    elif obs.is_dynamic:
+                        obs.step(DT_SECONDS)
+        else:
+            if self.track:
+                for obs in self.track.obstacles:
+                    obs.step(DT_SECONDS)
 
         # 5. Collision Checks
         wall_collision = self._check_wall_collision()
         obstacle_collision = False
         if self.track:
+            cos_y = math.cos(self.car_yaw)
+            sin_y = math.sin(self.car_yaw)
+            car_centers = [
+                (self.car_x + 0.8 * cos_y, self.car_y + 0.8 * sin_y),
+                (self.car_x, self.car_y),
+                (self.car_x - 0.8 * cos_y, self.car_y - 0.8 * sin_y),
+            ]
             for obs in self.track.obstacles:
-                dist = math.hypot(obs.world_x - self.car_x, obs.world_y - self.car_y)
-                if dist < (COLLISION_RADIUS + obs.radius):
-                    obstacle_collision = True
+                r_obs = obs.radius
+                for ccx, ccy in car_centers:
+                    dist = math.hypot(obs.world_x - ccx, obs.world_y - ccy)
+                    if dist < (0.85 + r_obs):
+                        obstacle_collision = True
+                        break
+                if obstacle_collision:
                     break
 
-        collision = wall_collision or obstacle_collision
+        if self.sim_mode == "gazebo" and self.ros_bridge is not None:
+            gz_contact = self.ros_bridge.get_collision()
+            collision = gz_contact or wall_collision or obstacle_collision
+        else:
+            collision = wall_collision or obstacle_collision
 
         # 6. Mission Phase Transitions
         goal_state = self._compute_goal_state()

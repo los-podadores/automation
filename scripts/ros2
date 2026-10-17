@@ -3,6 +3,8 @@
 # Forwards CLI commands to ROS 2 Jazzy inside the gazebo-harmonic distrobox container.
 set -e
 
+export PATH="/run/current-system/sw/bin:$PATH"
+export DBX_CONTAINER_MANAGER="docker"
 CONTAINER_NAME="gazebo-harmonic"
 
 # Ensure container is running if docker is available

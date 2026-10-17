@@ -3,6 +3,8 @@
 # Forwards CLI commands to Gazebo Harmonic inside the container with sanitized environment.
 set -e
 
+export PATH="/run/current-system/sw/bin:$PATH"
+export DBX_CONTAINER_MANAGER="docker"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTAINER_NAME="gazebo-harmonic"
 

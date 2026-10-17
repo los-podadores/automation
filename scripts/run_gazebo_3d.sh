@@ -5,7 +5,8 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-export PATH="$DIR/scripts:$PATH"
+export PATH="/run/current-system/sw/bin:$DIR/scripts:$PATH"
+export DBX_CONTAINER_MANAGER="docker"
 export GZ_IP=127.0.0.1
 export GZ_SIM_RESOURCE_PATH="$DIR/src/v2/model:${GZ_SIM_RESOURCE_PATH:-}"
 
