@@ -106,13 +106,16 @@ class TestTrackSynchronization(unittest.TestCase):
         self.assertIn("tractor_contact_sensor", content)
         self.assertIn("/model/tractor/contacts", content)
 
-    def test_bridge_config_contacts_and_obstacle_odometry(self) -> None:
-        """Verify bridge_config.yaml contains tractor contacts and obstacle odometry."""
+    def test_bridge_config_contacts_and_joint_state(self) -> None:
+        """Verify bridge_config.yaml contains tractor contacts, joint_state, and imu."""
         bridge_yaml_path = Path("src/v2/bridge_config.yaml")
         content = bridge_yaml_path.read_text(encoding="utf-8")
         self.assertIn("/model/tractor/contacts", content)
         self.assertIn("ros_gz_interfaces/msg/Contacts", content)
-        self.assertIn("/model/obstacle_0/odometry", content)
+        self.assertIn("/model/tractor/joint_state", content)
+        self.assertIn("sensor_msgs/msg/JointState", content)
+        self.assertIn("/model/tractor/imu", content)
+        self.assertIn("sensor_msgs/msg/Imu", content)
 
     def test_multi_circle_wall_collision_detection(self) -> None:
         """Verify multi-circle collision check catches corner overlaps that single circle misses."""

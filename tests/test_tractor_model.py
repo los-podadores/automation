@@ -91,6 +91,13 @@ class TestTractorModelSDF(unittest.TestCase):
         monitored_collisions = {c.text for c in contact_sensor.findall("contact/collision")}
         self.assertIn("chassis_body_collision", monitored_collisions)
 
+    def test_imu_sensor(self) -> None:
+        chassis = self.model.find("link[@name='chassis']")
+        imu = chassis.find("sensor[@name='chassis_imu']")
+        self.assertIsNotNone(imu)
+        self.assertEqual(imu.attrib["type"], "imu")
+        self.assertEqual(imu.find("topic").text, "/model/tractor/imu")
+
 
 if __name__ == "__main__":
     unittest.main()

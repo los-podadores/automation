@@ -36,7 +36,7 @@ class Ros2GazeboBridge:
             import rclpy
             from geometry_msgs.msg import Twist
             from nav_msgs.msg import Odometry
-            from sensor_msgs.msg import LaserScan
+            from sensor_msgs.msg import Imu, JointState, LaserScan
             from std_msgs.msg import Float64
         except ImportError as exc:
             raise RuntimeError(
@@ -50,6 +50,8 @@ class Ros2GazeboBridge:
         self.Odometry = Odometry
         self.LaserScan = LaserScan
         self.Float64 = Float64
+        self.JointState = JointState
+        self.Imu = Imu
 
         try:
             from ros_gz_interfaces.msg import Contacts
@@ -67,9 +69,14 @@ class Ros2GazeboBridge:
         # Cached state from Gazebo
         self.latest_scans: dict[str, LaserScanData] = {}
         self.latest_odom: dict[str, float] | None = None
+        self.latest_steering_angle: float = 0.0
+        self.latest_imu: dict[str, float] | None = None
         self.latest_collision: bool = False
         self.obstacle_states: dict[int, dict[str, float]] = {}
         self.last_scan_time: float = 0.0
+        self._last_vx: float = 0.0
+        self._last_vx_time: float = 0.0
+        self._ax: float = 0.0
 
         # Subscriptions: 4 LiDAR Pods
         self.sub_front = self.node.create_subscription(
@@ -99,17 +106,15 @@ class Ros2GazeboBridge:
                 self.Contacts, "/model/tractor/contacts", self._on_contacts, 10
             )
 
-        # Subscriptions: Dynamic Obstacle Odometry
-        self.sub_obstacle_odoms = []
-        for i in range(6):
-            topic = f"/model/obstacle_{i}/odometry"
-            sub = self.node.create_subscription(
-                Odometry,
-                topic,
-                (lambda idx: lambda m: self._on_obstacle_odom(idx, m))(i),
-                10,
-            )
-            self.sub_obstacle_odoms.append(sub)
+        # Subscription: Articulated Joint States (Physical Steering Knuckles)
+        self.sub_joint_state = self.node.create_subscription(
+            JointState, "/model/tractor/joint_state", self._on_joint_state, 10
+        )
+
+        # Subscription: Chassis IMU (Linear Acceleration & Angular Velocity)
+        self.sub_imu = self.node.create_subscription(
+            Imu, "/model/tractor/imu", self._on_imu, 10
+        )
 
         # Publishers: Commands
         self.pub_cmd_vel = self.node.create_publisher(Twist, "/cmd_vel", 10)
@@ -157,14 +162,23 @@ class Ros2GazeboBridge:
         yaw = math.atan2(siny_cosp, cosy_cosp)
 
         lin_vx = float(msg.twist.twist.linear.x)
+        lin_vy = float(msg.twist.twist.linear.y)
         ang_yaw_rate = float(msg.twist.twist.angular.z)
 
+        now = time.monotonic()
         with self.lock:
+            if self._last_vx_time > 0.0 and now > self._last_vx_time:
+                dt = now - self._last_vx_time
+                self._ax = (lin_vx - self._last_vx) / max(dt, 1e-4)
+            self._last_vx = lin_vx
+            self._last_vx_time = now
+
             self.latest_odom = {
                 "x": float(pos.x),
                 "y": float(pos.y),
                 "yaw": yaw,
                 "vx": lin_vx,
+                "vy": lin_vy,
                 "yaw_rate": ang_yaw_rate,
             }
 
@@ -175,6 +189,25 @@ class Ros2GazeboBridge:
     def _on_wheel_odom(self, msg: Any) -> None:
         if not self.has_world_odom:
             self._parse_odom(msg)
+
+    def _on_joint_state(self, msg: Any) -> None:
+        """Read true articulated joint positions (steering knuckles)."""
+        steer_positions: list[float] = []
+        with self.lock:
+            for name, pos in zip(msg.name, msg.position, strict=False):
+                if "steering" in name:
+                    steer_positions.append(float(pos))
+            if steer_positions:
+                self.latest_steering_angle = float(np.mean(steer_positions))
+
+    def _on_imu(self, msg: Any) -> None:
+        """Read true linear acceleration and angular velocity from chassis IMU."""
+        with self.lock:
+            self.latest_imu = {
+                "ax": float(msg.linear_acceleration.x),
+                "ay": float(msg.linear_acceleration.y),
+                "yaw_rate": float(msg.angular_velocity.z),
+            }
 
     def publish_action(self, target_steer_rad: float, target_speed_mps: float) -> None:
         """Publish coordinated steering angle and rear differential twist commands."""
@@ -212,17 +245,56 @@ class Ros2GazeboBridge:
         with self.lock:
             self.latest_collision = is_colliding
 
-    def _on_obstacle_odom(self, idx: int, msg: Any) -> None:
-        """Track true physical pose of dynamic obstacle from Gazebo Harmonic."""
-        pos = msg.pose.pose.position
-        twist = msg.twist.twist
+    def reset_vehicle(self, sx: float, sy: float, syaw: float) -> None:
+        """Reset commands, state caches, and reposition vehicle in Gazebo."""
         with self.lock:
-            self.obstacle_states[idx] = {
-                "x": float(pos.x),
-                "y": float(pos.y),
-                "vx": float(twist.linear.x),
-                "vy": float(twist.linear.y),
-            }
+            self.latest_collision = False
+            self.latest_odom = None
+            self.latest_steering_angle = 0.0
+            self.latest_imu = None
+            self._last_vx = 0.0
+            self._last_vx_time = 0.0
+            self._ax = 0.0
+
+        try:
+            stop_twist = self.Twist()
+            self.pub_cmd_vel.publish(stop_twist)
+            self.pub_drive.publish(stop_twist)
+            zero_steer = self.Float64()
+            zero_steer.data = 0.0
+            self.pub_steer.publish(zero_steer)
+        except Exception:
+            pass
+
+        # Reset pose in Gazebo via gz service call if available
+        import subprocess
+        qz = math.sin(syaw / 2.0)
+        qw = math.cos(syaw / 2.0)
+        req_str = f'name: "tractor", position: {{x: {sx:.3f}, y: {sy:.3f}, z: 0.50}}, orientation: {{x: 0.0, y: 0.0, z: {qz:.6f}, w: {qw:.6f}}}'
+        gz_cmd = Path(__file__).resolve().parent.parent.parent / "scripts" / "gz"
+        if gz_cmd.exists():
+            try:
+                subprocess.run(
+                    [
+                        str(gz_cmd),
+                        "service",
+                        "-s",
+                        "/world/procedural_car_track/set_pose",
+                        "--reqtype",
+                        "gz.msgs.Pose",
+                        "--reptype",
+                        "gz.msgs.Boolean",
+                        "--timeout",
+                        "500",
+                        "--req",
+                        req_str,
+                    ],
+                    capture_output=True,
+                    timeout=1.5,
+                    check=False,
+                )
+            except Exception:
+                pass
 
     def get_collision(self) -> bool:
         """Thread-safe query of Gazebo Harmonic collision state."""
@@ -230,14 +302,21 @@ class Ros2GazeboBridge:
             return self.latest_collision
 
     def get_obstacle_states(self) -> dict[int, dict[str, float]]:
-        """Thread-safe snapshot of all active dynamic obstacle positions in Gazebo."""
-        with self.lock:
-            return dict(self.obstacle_states)
+        """Deprecated: dynamic obstacles are perceived strictly through LiDAR point returns."""
+        return {}
 
     def get_state(self) -> tuple[dict[str, float] | None, dict[str, LaserScanData]]:
         """Retrieve latest thread-safe snapshot of odometry and 4-pod scans."""
         with self.lock:
             odom = dict(self.latest_odom) if self.latest_odom is not None else None
+            if odom is not None:
+                odom["steering_angle"] = self.latest_steering_angle
+                if self.latest_imu is not None:
+                    odom["ax"] = self.latest_imu["ax"]
+                    odom["ay"] = self.latest_imu["ay"]
+                else:
+                    odom["ax"] = self._ax
+                    odom["ay"] = odom["vx"] * odom["yaw_rate"]
             scans = dict(self.latest_scans)
         return odom, scans
 

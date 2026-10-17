@@ -285,6 +285,12 @@ def create_model(g: dict, p: dict) -> ET.Element:
     element(contact_el, "collision", "connecting_beam_collision")
     element(contact_el, "collision", "chassis_body_collision")
 
+    # Chassis IMU Sensor for native dynamic linear acceleration and angular velocity
+    imu_sensor = element(chassis, "sensor", name="chassis_imu", type="imu")
+    element(imu_sensor, "always_on", "true")
+    element(imu_sensor, "update_rate", 50)
+    element(imu_sensor, "topic", "/model/tractor/imu")
+
     # Axles, Steering Knuckles, and Wheels
     for end in ("rear", "front"):
         a = g[end]

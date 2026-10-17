@@ -362,6 +362,7 @@ class CarGazeboEnv(gym.Env):
                 raise RuntimeError(
                     "sim_mode is 'gazebo' but ros_bridge is not initialized."
                 )
+            self.ros_bridge.reset_vehicle(sx, sy, syaw)
             # Wait up to 1.0s for background executor to receive initial state from Gazebo
             t_start = time.monotonic()
             while time.monotonic() - t_start < 1.0:
@@ -380,7 +381,10 @@ class CarGazeboEnv(gym.Env):
                             sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
                         )
                     self.car_vx = odom["vx"]
+                    self.car_vy = odom.get("vy", 0.0)
                     self.car_yaw_rate = odom["yaw_rate"]
+                    self.car_steer = odom.get("steering_angle", 0.0)
+                    self.car_ax = odom.get("ax", 0.0)
                 if scans:
                     self._current_scans = scans
                 if odom is not None and len(scans) == 4:
@@ -414,26 +418,25 @@ class CarGazeboEnv(gym.Env):
         )
         goal_state = self._compute_goal_state()
 
+        if self.sim_mode == "gazebo":
+            if self.ros_bridge is None:
+                raise RuntimeError(
+                    "sim_mode is 'gazebo' but ros_bridge is not initialized."
+                )
+            # Physical 4-pod LiDAR returns are the sole source of truth (no mock perception)
+            return self.map_builder.build_observation(
+                kinematics=kinematics,
+                goal_state=goal_state,
+                pod_scans=self._current_scans,
+            )
+
+        # Mock perception fallback for pure headless CPU mock simulation
         tracked_obstacles = self.mock_perception.filter_and_noise(
             self.car_x,
             self.car_y,
             self.car_yaw,
             self.track.obstacles if self.track else [],
         )
-
-        if self.sim_mode == "gazebo":
-            if self.ros_bridge is None:
-                raise RuntimeError(
-                    "sim_mode is 'gazebo' but ros_bridge is not initialized."
-                )
-            return self.map_builder.build_observation(
-                kinematics=kinematics,
-                goal_state=goal_state,
-                obstacles=tracked_obstacles,
-                pod_scans=self._current_scans,
-            )
-
-        # Mock perception fallback for pure mock simulation
         wall_segments_ego = self._transform_walls_to_ego()
 
         return self.map_builder.build_observation(
@@ -466,6 +469,8 @@ class CarGazeboEnv(gym.Env):
                     # Vehicle is stationary or reversing; engage reverse drive
                     target_speed = throttle_cmd * abs(MIN_SPEED_MPS)
             self.ros_bridge.publish_action(target_steer, target_speed)
+            # Enforce simulation step pacing (50ms at 20 Hz) so Gazebo physics simulates the step
+            time.sleep(DT_SECONDS)
             odom, scans = self.ros_bridge.get_state()
             if odom is not None:
                 if self.ros_bridge.has_world_odom:
@@ -484,8 +489,10 @@ class CarGazeboEnv(gym.Env):
                         sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
                     )
                 self.car_vx = odom["vx"]
+                self.car_vy = odom.get("vy", 0.0)
                 self.car_yaw_rate = odom["yaw_rate"]
-                self.car_steer = target_steer
+                self.car_steer = odom.get("steering_angle", target_steer)
+                self.car_ax = odom.get("ax", 0.0)
             if scans:
                 self._current_scans = scans
         else:
@@ -514,47 +521,34 @@ class CarGazeboEnv(gym.Env):
             self.car_x += self.car_vx * math.cos(self.car_yaw) * DT_SECONDS
             self.car_y += self.car_vx * math.sin(self.car_yaw) * DT_SECONDS
 
-        # 4. Update Dynamic Obstacles
-        if self.sim_mode == "gazebo" and self.ros_bridge is not None:
-            # Synchronize true obstacle states from Gazebo Harmonic
-            obs_states = self.ros_bridge.get_obstacle_states()
-            if self.track:
-                for i, obs in enumerate(self.track.obstacles):
-                    if obs.is_dynamic and i in obs_states:
-                        st = obs_states[i]
-                        obs.world_x = st["x"]
-                        obs.world_y = st["y"]
-                        obs.world_vx = st["vx"]
-                        obs.world_vy = st["vy"]
-                    elif obs.is_dynamic:
-                        obs.step(DT_SECONDS)
-        else:
-            if self.track:
-                for obs in self.track.obstacles:
-                    obs.step(DT_SECONDS)
+        # 4. Update Dynamic Obstacles (in pure headless CPU mock simulation)
+        if self.sim_mode != "gazebo" and self.track:
+            for obs in self.track.obstacles:
+                obs.step(DT_SECONDS)
 
         # 5. Collision Checks
-        wall_collision = self._check_wall_collision()
-        obstacle_collision = False
-        if self.track and self.track.obstacles:
-            cos_y = math.cos(self.car_yaw)
-            sin_y = math.sin(self.car_yaw)
-            hx = CAR_LENGTH / 2.0
-            hy = CAR_WIDTH / 2.0
-            for obs in self.track.obstacles:
-                dx = obs.world_x - self.car_x
-                dy = obs.world_y - self.car_y
-                ex = dx * cos_y + dy * sin_y
-                ey = -dx * sin_y + dy * cos_y
-                dist_to_box = math.sqrt(self._point_to_aabb_dist_sq(ex, ey, hx, hy))
-                if dist_to_box <= (obs.radius + 0.02):
-                    obstacle_collision = True
-                    break
-
         if self.sim_mode == "gazebo" and self.ros_bridge is not None:
-            gz_contact = self.ros_bridge.get_collision()
-            collision = gz_contact or wall_collision or obstacle_collision
+            # Gazebo Harmonic Contact System is the sole ground truth
+            collision = self.ros_bridge.get_collision()
+            wall_collision = collision
+            obstacle_collision = False
         else:
+            wall_collision = self._check_wall_collision()
+            obstacle_collision = False
+            if self.track and self.track.obstacles:
+                cos_y = math.cos(self.car_yaw)
+                sin_y = math.sin(self.car_yaw)
+                hx = CAR_LENGTH / 2.0
+                hy = CAR_WIDTH / 2.0
+                for obs in self.track.obstacles:
+                    dx = obs.world_x - self.car_x
+                    dy = obs.world_y - self.car_y
+                    ex = dx * cos_y + dy * sin_y
+                    ey = -dx * sin_y + dy * cos_y
+                    dist_to_box = math.sqrt(self._point_to_aabb_dist_sq(ex, ey, hx, hy))
+                    if dist_to_box <= (obs.radius + 0.02):
+                        obstacle_collision = True
+                        break
             collision = wall_collision or obstacle_collision
 
         # 6. Mission Phase Transitions
@@ -632,6 +626,8 @@ class CarGazeboEnv(gym.Env):
     @property
     def latest_raw_pod_beams(self) -> list[dict[str, Any]]:
         """Physical ray beam segments per sensor pod with exact mounting origins."""
+        if self.sim_mode == "gazebo" and self._current_scans:
+            return self.map_builder.extract_pod_beam_segments(self._current_scans)
         tracked_obs = (
             self.mock_perception.filter_and_noise(
                 self.car_x,
@@ -642,10 +638,6 @@ class CarGazeboEnv(gym.Env):
             if self.track
             else []
         )
-        if self.sim_mode == "gazebo" and self._current_scans:
-            return self.map_builder.extract_pod_beam_segments(
-                self._current_scans, obstacles=tracked_obs
-            )
         if self.map_builder.latest_mock_pod_scans:
             return self.map_builder.extract_pod_beam_segments(
                 self.map_builder.latest_mock_pod_scans, obstacles=tracked_obs

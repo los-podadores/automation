@@ -156,6 +156,11 @@
           <collision>chassis_body_collision</collision>
         </contact>
       </sensor>
+      <sensor name="chassis_imu" type="imu">
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <topic>/model/tractor/imu</topic>
+      </sensor>
       <visual name="rear_axle_visual">
         <pose>-1 0 0.5 -1.570796327 0 0</pose>
         <geometry>

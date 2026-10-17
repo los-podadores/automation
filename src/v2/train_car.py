@@ -107,7 +107,11 @@ def main() -> None:
             },
             ignore_reinit_error=True,
         )
-        num_runners = args.runners if args.runners is not None else 2
+        if args.sim_mode == "gazebo":
+            num_runners = args.runners if args.runners is not None else 1
+            print(f"[train] Gazebo mode: using {num_runners} environment runner(s) for live ROS 2 simulation.")
+        else:
+            num_runners = args.runners if args.runners is not None else 2
 
     register_env(ENV_NAME, env_creator)
     print(f"[train] Configuring PPO with {num_runners} environment runners...")

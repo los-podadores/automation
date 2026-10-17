@@ -149,8 +149,11 @@ class CarTeleopApp:
                     self.obs, self.info = self.env.reset()
                     self.total_reward = 0.0
                     self.trail.clear()
-                    self.status_msg = "Reset vehicle and track."
-                    self.status_timer = 45
+                    if self.backend == "gazebo":
+                        self.status_msg = "Teleported vehicle to start pose in Gazebo 3D."
+                    else:
+                        self.status_msg = "Reset vehicle and track."
+                    self.status_timer = 50
                 if event.key == pygame.K_p:
                     self.paused = not self.paused
                 if event.key == pygame.K_n:
@@ -590,6 +593,9 @@ class CarTeleopApp:
             f"Distance to Target: {goal_dist:5.1f} m",
             f"Heading:            {math.degrees(self.env.car_yaw):+5.1f}°",
             f"Yaw Rate:           {math.degrees(self.env.car_yaw_rate):+5.1f}°/s",
+            f"Linear Accel (ax):  {self.env.car_ax:+5.2f} m/s²",
+            f"Lateral Slip (vy):  {self.env.car_vy:+5.2f} m/s",
+            f"Knuckle Steer:      {steer_deg:+5.1f}°",
             f"Collision Status:   {'COLLISION!' if is_colliding else 'CLEAR'}",
             f"Simulation Steps:   {self.env.step_count:d}",
         ]
@@ -597,8 +603,8 @@ class CarTeleopApp:
             color = TEXT_RED if "COLLISION!" in m else TEXT_WHITE
             lbl = self.font_body.render(m, True, color)
             self.screen.blit(lbl, (x, y))
-            y += 22
-        y += 10
+            y += 20
+        y += 6
 
         # 360-Degree Surround Radar Minimap
         radar_cx = x + (PANEL_W - 48) // 2
@@ -790,18 +796,18 @@ class CarTeleopApp:
                     self.collision_flash_timer -= 1
 
                 if terminated or truncated:
-                    if self.backend == "sim":
-                        was_collision = bool(self.info.get("collision"))
-                        self.obs, self.info = self.env.reset()
-                        if was_collision:
-                            self.info["collision"] = True
-                            self.collision_flash_timer = 45
-                        self.total_reward = 0.0
-                        self.trail.clear()
+                    was_collision = bool(self.info.get("collision"))
+                    self.obs, self.info = self.env.reset()
+                    if was_collision:
+                        self.info["collision"] = True
+                        self.collision_flash_timer = 45
+                    self.total_reward = 0.0
+                    self.trail.clear()
+                    if self.backend == "gazebo":
+                        self.status_msg = "Episode reset. Vehicle returned to start in Gazebo."
                     else:
-                        # In live Gazebo backend, reset step count / reward without restarting Gazebo physics
-                        self.env.step_count = 0
-                        self.total_reward = 0.0
+                        self.status_msg = "Episode reset. Vehicle returned to start."
+                    self.status_timer = 60
 
             self.draw_world()
             self.draw_hud()
