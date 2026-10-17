@@ -1,5 +1,9 @@
 # Los Podadores
 
+La simulación 3D del tractor con dirección delantera y control por teclado está
+documentada en [sim/tractor/README.md](sim/tractor/README.md). Utiliza Gazebo
+Harmonic sobre Ubuntu 24.04 / WSL 2, con geometría extraída del CAD proporcionado.
+
 ## Instalación y Configuración
 
 Se recomienda utilizar [uv](https://github.com/astral-sh/uv), un instalador y gestor de paquetes de Python.

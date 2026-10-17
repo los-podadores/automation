@@ -1,0 +1,33 @@
+{
+  "source": "cad/TRACTOR.stp",
+  "source_sha256": "1ce380d2dfc678b462bb77b35e83c48f5abe9d025542be4aa215acbd195e9fc4",
+  "source_units": "mm",
+  "axis_conversion": "Gazebo (x,y,z) = STEP (x,-z,y)/1000, centred between axles and raised to ground",
+  "representation": "Articulated analytic reconstruction; beam simplified to a box; not exact CAD tessellation",
+  "wheelbase_m": 2.0,
+  "beam_width_m": 0.15,
+  "beam_height_m": 0.15,
+  "beam_z_m": 0.5,
+  "rear": {
+    "cad_x_mm": -1000.0,
+    "cad_height_mm": 0.0,
+    "wheel_radius_m": 0.5,
+    "wheel_width_m": 0.27,
+    "track_m": 1.4,
+    "axle_radius_m": 0.11004810042424999,
+    "axle_length_m": 1.13,
+    "x_m": -1.0,
+    "z_m": 0.5
+  },
+  "front": {
+    "cad_x_mm": 1000.0,
+    "cad_height_mm": -128.580256045823,
+    "wheel_radius_m": 0.37,
+    "wheel_width_m": 0.16,
+    "track_m": 1.29,
+    "axle_radius_m": 0.0663142122398004,
+    "axle_length_m": 1.13,
+    "x_m": 1.0,
+    "z_m": 0.371419743954177
+  }
+}

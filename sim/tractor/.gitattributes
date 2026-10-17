@@ -1,0 +1,9 @@
+*.sh text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.sdf text eol=lf
+*.config text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+cad/*.stp -text
+*.ps1 text eol=crlf
