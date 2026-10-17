@@ -167,6 +167,9 @@ class GazeboValidationTests(unittest.TestCase):
     def test_obstacle_world_is_accepted_by_gazebo(self):
         self.validate("worlds/tractor_obstacles.sdf")
 
+    def test_route_world_is_accepted_by_gazebo(self):
+        self.validate("worlds/tractor_route.sdf")
+
 
 class ObstacleDecisionTests(unittest.TestCase):
     def setUp(self):
@@ -189,6 +192,15 @@ class ObstacleDecisionTests(unittest.TestCase):
     def test_side_obstacle_does_not_block_straight_path(self):
         dog = Observation("dog", "perro", 3, 3, 0.65)
         self.assertTrue(self.decide([dog]).allowed)
+
+    def test_predicts_person_approaching_from_side(self):
+        person = Observation("crossing", "persona", 5, 3, 0.36, 0, -0.7)
+        self.assertTrue(
+            self.decide(
+                [Observation("still", "persona", 5, 3, 0.36)], speed=1.2
+            ).allowed
+        )
+        self.assertFalse(self.decide([person], speed=1.2).allowed)
 
     def test_unrecognised_class_in_path_also_blocks(self):
         self.assertFalse(self.decide([Observation("box", "objeto", 3, 0, 0.2)]).allowed)

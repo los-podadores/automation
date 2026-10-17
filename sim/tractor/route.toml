@@ -1,0 +1,20 @@
+# Aproximación para simulación. Solo los 110 m rectos vienen del recorrido indicado.
+# Puerta, radio, ancho de camino y espacio de retorno pendientes de medir en campo.
+[layout]
+straight_m = 110.0
+curve_radius_m = 6.0
+after_curve_m = 5.0
+gate_after_curve_m = 3.0
+gate_width_m = 3.5
+road_width_m = 4.5
+turn_radius_m = 6.0
+turn_staging_m = 12.0
+
+[motion]
+cruise_mps = 1.2
+curve_mps = 0.6
+gate_mps = 0.45
+lookahead_m = 2.0
+obstacle_clearance_m = 0.65
+tracking_limit_m = 0.8
+goal_tolerance_m = 0.2

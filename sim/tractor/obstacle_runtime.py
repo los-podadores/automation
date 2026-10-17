@@ -11,7 +11,10 @@ from obstacles import CROSSERS, Observation, VehicleState
 
 class SceneObserver:
     def __init__(
-        self, world: str = "tractor_obstacles", rear_radius: float = 0.5
+        self,
+        world: str = "tractor_obstacles",
+        rear_radius: float = 0.5,
+        crossers: dict | None = None,
     ) -> None:
         from gz.msgs10.model_pb2 import Model
         from gz.msgs10.pose_v_pb2 import Pose_V
@@ -19,9 +22,11 @@ class SceneObserver:
 
         self.lock = threading.Lock()
         self.rear_radius = rear_radius
+        self.crossers = CROSSERS if crossers is None else crossers
         self.vehicle: VehicleState | None = None
         self.received = 0.0
         self.actors: dict[str, tuple[Observation, float]] = {}
+        self.actor_stamps: dict[str, float] = {}
         self.node = Node()
         if not self.node.subscribe(
             Model, "/model/tractor/joint_state", self.on_vehicle
@@ -48,10 +53,20 @@ class SceneObserver:
 
     def on_poses(self, msg) -> None:
         now = time.monotonic()
+        stamp = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
         with self.lock:
             for pose in msg.pose:
-                spec = CROSSERS.get(pose.name)
+                spec = self.crossers.get(pose.name)
                 if spec is not None:
+                    vx = vy = 0.0
+                    previous = self.actors.get(pose.name)
+                    dt = stamp - self.actor_stamps.get(pose.name, stamp)
+                    if previous is not None and 1e-5 < dt < 0.5:
+                        vx = (pose.position.x - previous[0].x) / dt
+                        vy = (pose.position.y - previous[0].y) / dt
+                    elif previous is not None and dt <= 1e-5:
+                        vx, vy = previous[0].vx, previous[0].vy
+                    self.actor_stamps[pose.name] = stamp
                     self.actors[pose.name] = (
                         Observation(
                             pose.name,
@@ -59,6 +74,8 @@ class SceneObserver:
                             pose.position.x,
                             pose.position.y,
                             spec["radius"],
+                            vx,
+                            vy,
                         ),
                         now,
                     )
@@ -68,7 +85,7 @@ class SceneObserver:
         with self.lock:
             fresh = (
                 now - self.received < 0.6
-                and len(self.actors) == len(CROSSERS)
+                and len(self.actors) == len(self.crossers)
                 and all(now - stamp < 0.6 for _obs, stamp in self.actors.values())
             )
             return self.vehicle, [obs for obs, _stamp in self.actors.values()], fresh
@@ -77,6 +94,7 @@ class SceneObserver:
 class CrossingScenario:
     def __init__(self, observer: SceneObserver) -> None:
         self.observer = observer
+        self.progress = 0.0
         self.stopped = threading.Event()
         self.error = ""
         self.thread = threading.Thread(
@@ -92,7 +110,8 @@ class CrossingScenario:
 
         node = Node()
         publishers = {
-            name: node.advertise(f"/model/{name}/cmd_vel", Twist) for name in CROSSERS
+            name: node.advertise(f"/model/{name}/cmd_vel", Twist)
+            for name in self.observer.crossers
         }
         active: set[str] = set()
         try:
@@ -100,8 +119,13 @@ class CrossingScenario:
                 vehicle, observations, fresh = self.observer.snapshot()
                 positions = {obs.name: obs for obs in observations}
                 self.error = ""
-                for name, spec in CROSSERS.items():
-                    if vehicle is not None and vehicle.x >= spec["trigger_x"]:
+                for name, spec in self.observer.crossers.items():
+                    triggered = (
+                        self.progress >= spec["trigger_s"]
+                        if "trigger_s" in spec
+                        else vehicle is not None and vehicle.x >= spec["trigger_x"]
+                    )
+                    if triggered:
                         active.add(name)
                     message = Twist()
                     if fresh and name in active and name in positions:

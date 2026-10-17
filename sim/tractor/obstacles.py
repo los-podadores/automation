@@ -49,6 +49,8 @@ class Observation:
     x: float
     y: float
     radius: float
+    vx: float = 0.0
+    vy: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ class Decision:
     allowed: bool
     state: str
     reason: str
+    obstacle: str | None = None
 
 
 def circle_rectangle_gap(
@@ -130,7 +133,10 @@ class ObstacleGuard:
         rear_y = vehicle.y + self.rear_x * math.sin(vehicle.yaw)
         for obs in observations:
             if (
-                not all(math.isfinite(value) for value in (obs.x, obs.y, obs.radius))
+                not all(
+                    math.isfinite(value)
+                    for value in (obs.x, obs.y, obs.radius, obs.vx, obs.vy)
+                )
                 or obs.radius < 0
             ):
                 self.waiting = True
@@ -152,15 +158,22 @@ class ObstacleGuard:
                     speed,
                     vehicle.sim_time,
                 )
+                # Check both current occupancy and constant-velocity crossing.
+                # Requested cruising speed is retained while stopped, so a
+                # crossing is not declared clear merely because v became zero.
+                predicted_time = abs(distance) / max(v, 0.1)
                 if (
-                    circle_rectangle_gap(
-                        obs.x,
-                        obs.y,
-                        obs.radius,
-                        projected,
-                        self.front,
-                        self.rear,
-                        self.half_width,
+                    min(
+                        circle_rectangle_gap(
+                            obs.x + obs.vx * time_ahead,
+                            obs.y + obs.vy * time_ahead,
+                            obs.radius,
+                            projected,
+                            self.front,
+                            self.rear,
+                            self.half_width,
+                        )
+                        for time_ahead in (0.0, predicted_time)
                     )
                     < self.clearance
                 ):
@@ -168,7 +181,10 @@ class ObstacleGuard:
                     self.clear_since = None
                     state = "FRENAR" if abs(vehicle.speed) > 0.03 else "ESPERAR"
                     return Decision(
-                        False, state, f"{obs.label.capitalize()} en la trayectoria"
+                        False,
+                        state,
+                        f"{obs.label.capitalize()} en la trayectoria",
+                        obs.name,
                     )
         if self.waiting:
             if self.clear_since is None:

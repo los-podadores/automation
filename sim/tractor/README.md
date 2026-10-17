@@ -1,8 +1,9 @@
 # Tractor 3D — Los Podadores
 
 Primera simulación articulada del tractor en **Gazebo Harmonic**, con dirección
-delantera Ackermann, tracción trasera y un panel de teclado. El escenario incluye
-suelo plano, límites y obstáculos locales; no necesita descargar modelos de Fuel.
+delantera Ackermann, tracción trasera, conducción por teclado y recorridos
+automáticos con obstáculos. Los escenarios son locales; no necesitan descargar
+modelos de Fuel.
 
 Esta etapa utiliza Gazebo Transport directamente. **ROS 2, YOLO y PPO no son
 necesarios todavía.** Más adelante se puede integrar ROS 2 Jazzy y `ros_gz` sobre
@@ -147,10 +148,10 @@ del escenario. Este modo no detecta automáticamente cualquier objeto añadido.
 Después se conectará una percepción basada en cámara y sensores, con estimación
 de distancias, para alimentar las decisiones con observaciones medidas.
 
-Esta recta corta comprueba los encuentros; **aún no representa el recorrido real
-de unos 110 m, la curva, la puerta ni el regreso**. Para construir ese escenario
-faltan el ancho útil de la puerta y el espacio disponible para girar. Tampoco es
-una validación de frenado o seguridad del tractor físico.
+Esta recta corta comprueba los encuentros. Para los 110 m, la curva, la puerta y
+el regreso, usa `--route`, descrito en la siguiente sección. Ese escenario usa
+medidas provisionales para la puerta y el giro, pendientes de medir en campo.
+Tampoco es una validación de frenado o seguridad del tractor físico.
 
 El modo con obstáculos usa por defecto `GZ_PARTITION=los-podadores-tractor-obstacles`.
 Para ejecutar la prueba sin ventanas:
@@ -164,7 +165,88 @@ solo si termina el tramo, registra paradas por ambos actores y mantiene el marge
 geométrico configurado. El informe incluye los cambios de decisión y la separación
 mínima observada; una ejecución exitosa no garantiza otros escenarios.
 
-## 5. Qué se tomó del CAD y qué falta calibrar
+## 5. Recorrido completo: 110 m, curva, puerta y regreso
+
+Con la instalación existente no necesitas paquetes adicionales. En Ubuntu-24.04,
+desde la carpeta `automation`:
+
+```bash
+bash sim/tractor/run.sh --route
+```
+
+O desde PowerShell:
+
+```powershell
+.\sim\tractor\start_windows.ps1 -Route
+```
+
+Pulsa **Iniciar recorrido / Reanudar**. El tractor sigue la recta de 110 m, gira
+90° a la izquierda, atraviesa una puerta abierta, da la vuelta en una zona amplia,
+vuelve por la puerta y el camino y se detiene en el punto inicial, orientado hacia
+el regreso. Toda la marcha es hacia delante: no gira sobre su centro ni retrocede
+los 110 m. El panel muestra la fase, la decisión, el avance total, la velocidad
+medida, los dos pasos por la puerta y un mapa con su posición. La cámara de Gazebo
+se configura para seguir al tractor; Esc en la vista 3D permite soltar el seguimiento.
+El botón **Seguir tractor con la cámara** lo vuelve a activar.
+
+Una persona y un perro cruzan en la ida y otros dos en el regreso: son **cuatro
+encuentros**. El tractor anticipa cruces usando la velocidad estimada de los actores,
+se detiene, espera y reanuda al despejarse el paso. También comprueba los postes y
+paneles laterales de la puerta. **DETENER / Espacio** pausa la marcha; el mismo
+botón de inicio reanuda. Los actores ya activados pueden terminar de cruzar durante
+la pausa. Cierra y vuelve a lanzar para reiniciar todo el escenario.
+
+El entorno aproxima el camino con pavimento, marcas, cerco y árboles; las figuras
+siguen siendo modelos geométricos sencillos. **No es una reconstrucción fotográfica
+ni georreferenciada** del estadio. La puerta está abierta y no tiene mecanismo
+automático de apertura.
+
+Las medidas editables están en `sim/tractor/route.toml`:
+
+- Recta: **110 m**, según la aproximación indicada.
+- Curva: radio provisional **6 m**; permite respetar el límite de dirección del CAD.
+- Tramo tras la curva: **5 m**, con la puerta a **3 m** de su inicio.
+- Puerta: ancho libre provisional **3,5 m**.
+- Zona posterior: **12 m** adicionales antes de iniciar el retorno.
+- Retorno: tres arcos de radio **6 m** que cambian el sentido; reserva provisional
+  de unos **18 × 23 m**, incluyendo el tractor y margen alrededor de los arcos.
+- Velocidades provisionales: **1,2 m/s** en recta, **0,6 m/s** en curvas y
+  **0,45 m/s** al aproximarse a la puerta.
+
+El radio, la puerta, los anchos y el espacio de giro **todavía deben medirse en el
+lugar real**. El recorrido completo ronda **315 m** contando ida, regreso, curva,
+accesos y maniobra de retorno. No cabe suponer que una curva de 5 m de longitud
+baste para girar este tractor: el programa comprueba el radio y el ancho libre
+contra la geometría y el margen configurado.
+
+La percepción y localización siguen usando la verdad conocida de Gazebo; no se ha
+conectado YOLO ni entrenado una política de conducción. El control sigue una ruta
+geométrica con realimentación de la pose física. Cerco y árboles tienen colisiones,
+pero la percepción de este escenario observa los cuatro actores y la puerta;
+no es un detector general de obstáculos añadidos. Si pierde datos, supera la
+desviación lateral permitida o pierde el margen de separación, ordena parar.
+
+La ejecución normal tarda varios minutos. Para adelantar el tiempo simulado sin
+cambiar las velocidades físicas configuradas:
+
+```bash
+bash sim/tractor/run.sh --route --time-scale 4
+```
+
+Prueba automática sin ventanas:
+
+```bash
+bash sim/tractor/run.sh --route --headless --time-scale 4
+```
+
+La partición por defecto es `los-podadores-tractor-route`. Se guardan
+`runs/tractor_route/last_run.json` y `trajectory.json`. Solo devuelve éxito si
+completa la ruta, atraviesa la puerta dos veces, registra una parada medida ante
+cada actor, mantiene el margen configurado y termina a menos de **0,2 m** del
+inicio con la orientación de regreso. Esto valida este escenario simulado; no
+valida los frenos, la detección visual o la seguridad del tractor físico.
+
+## 6. Qué se tomó del CAD y qué falta calibrar
 
 `cad/TRACTOR.stp` es una copia del archivo original proporcionado. Se conservan
 su hash SHA-256 y las medidas extraídas en `cad_dimensions.json`.
@@ -195,7 +277,7 @@ con `yaw_rate = velocidad * tan(dirección) / distancia_entre_ejes`. Las ruedas
 delanteras ruedan libremente. Esto no convierte al vehículo en uno que gire
 sobre sí mismo ni supone que el tractor real tendrá dos motores de tracción.
 
-## 6. Regenerar y comprobar
+## 7. Regenerar y comprobar
 
 Para comprobar geometría, articulaciones, inercias y órdenes de movimiento sin
 tener Gazebo instalado:
@@ -213,7 +295,7 @@ uv run python -m unittest discover -s sim/tractor/tests -v
 ```
 
 Si `gz` está disponible, la suite también valida el modelo y el escenario con
-`gz sdf -k`; esas tres pruebas se omiten cuando Gazebo no está instalado.
+`gz sdf -k`; esas cuatro pruebas se omiten cuando Gazebo no está instalado.
 **Estas comprobaciones no prueban por sí solas que el motor físico, las
 colisiones y la interfaz gráfica funcionen en el equipo.** Después
 de instalar Gazebo, realiza la validación física con:
@@ -253,4 +335,5 @@ bash sim/tractor/run.sh --headless
 - [Controlador Ackermann de Gazebo](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1AckermannSteering.html)
 - [Controlador del diferencial trasero](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1DiffDrive.html)
 - [Gazebo Transport en Python](https://gazebosim.org/api/transport/13/python.html)
+- [Configuración de seguimiento de cámara de Gazebo](https://github.com/gazebosim/gz-gui/blob/gz-gui8/src/plugins/camera_tracking/CameraTracking.cc)
 - [Aplicaciones gráficas en WSL](https://learn.microsoft.com/es-es/windows/wsl/tutorials/gui-apps)

@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
-from build_model import ROOT, main as build
+from build_model import ROOT, create_route_world, main as build, write_xml
 
 
-def simulation_environment(obstacles: bool = False) -> dict[str, str]:
+def simulation_environment(
+    obstacles: bool = False, route: bool = False
+) -> dict[str, str]:
     env = os.environ.copy()
     existing = env.get("GZ_SIM_RESOURCE_PATH", "")
     env["GZ_SIM_RESOURCE_PATH"] = str(ROOT / "models") + (
@@ -20,7 +25,11 @@ def simulation_environment(obstacles: bool = False) -> dict[str, str]:
     )
     env.setdefault(
         "GZ_PARTITION",
-        "los-podadores-tractor-obstacles" if obstacles else "los-podadores-tractor",
+        "los-podadores-tractor-route"
+        if route
+        else "los-podadores-tractor-obstacles"
+        if obstacles
+        else "los-podadores-tractor",
     )
     return env
 
@@ -88,7 +97,22 @@ def main() -> int:
     parser.add_argument(
         "--demo", action="store_true", help="Prueba corta autónoma ante persona y perro"
     )
+    parser.add_argument(
+        "--route", action="store_true", help="110 m, curva, puerta y regreso"
+    )
+    parser.add_argument(
+        "--time-scale",
+        type=float,
+        default=1,
+        help="Velocidad del tiempo simulado (1 a 4), solo --route",
+    )
     args = parser.parse_args()
+    if not math.isfinite(args.time_scale) or not 1 <= args.time_scale <= 4:
+        parser.error("--time-scale debe estar entre 1 y 4")
+    if args.time_scale != 1 and not args.route:
+        parser.error("--time-scale requiere --route")
+    if args.route and (args.demo or args.obstacles):
+        parser.error("Usa --route solo; ya incluye persona y perro en ambos sentidos")
     args.obstacles = args.obstacles or args.demo
     try:
         build()
@@ -99,12 +123,31 @@ def main() -> int:
     if args.check:
         print("Gazebo Harmonic y Python del sistema disponibles.")
         return 0
-    env = simulation_environment(args.obstacles)
+    env = simulation_environment(args.obstacles, args.route)
     world_path = (
         ROOT
         / "worlds"
-        / ("tractor_obstacles.sdf" if args.obstacles else "tractor_field.sdf")
+        / (
+            "tractor_route.sdf"
+            if args.route
+            else "tractor_obstacles.sdf"
+            if args.obstacles
+            else "tractor_field.sdf"
+        )
     )
+    temporary_world = None
+    if args.route and args.time_scale != 1:
+        from geometry import extract_geometry
+        from route import load_route_config
+
+        geometry = extract_geometry(ROOT / "cad/TRACTOR.stp")
+        document = create_route_world(
+            geometry, load_route_config(geometry), args.time_scale
+        )
+        document.find("world/include/uri").text = str(ROOT / "models/tractor/model.sdf")
+        temporary_world = tempfile.TemporaryDirectory(prefix="tractor-route-")
+        world_path = Path(temporary_world.name) / "tractor_route.sdf"
+        write_xml(world_path, document)
     for path in (ROOT / "models/tractor/model.sdf", world_path):
         result = subprocess.run(
             ["gz", "sdf", "-k", str(path)], env=env, cwd=ROOT / "worlds"
@@ -120,13 +163,24 @@ def main() -> int:
     )
     keyboard = None
     try:
-        if args.headless and not args.demo:
+        if args.headless and not (args.demo or args.route):
             return gazebo.wait()
         controller = [
             sys.executable,
-            str(ROOT / ("demo.py" if args.demo else "teleop.py")),
+            str(
+                ROOT
+                / (
+                    "route_demo.py"
+                    if args.route
+                    else "demo.py"
+                    if args.demo
+                    else "teleop.py"
+                )
+            ),
         ]
-        if args.demo and args.headless:
+        if args.route:
+            controller.extend(["--time-scale", str(args.time_scale)])
+        if (args.demo or args.route) and args.headless:
             controller.append("--headless")
         elif args.obstacles and not args.demo:
             controller.append("--obstacles")
@@ -149,6 +203,8 @@ def main() -> int:
         if keyboard is not None:
             stop_process(keyboard)
         stop_process(gazebo)
+        if temporary_world is not None:
+            temporary_world.cleanup()
 
 
 if __name__ == "__main__":

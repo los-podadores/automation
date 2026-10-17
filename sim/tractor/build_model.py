@@ -330,7 +330,7 @@ def write_xml(path: Path, root: ET.Element) -> None:
         stream.write("\n")
 
 
-def create_obstacle_world() -> ET.Element:
+def create_obstacle_world(crossers: dict | None = None) -> ET.Element:
     """Short crossing test with collidable, kinematic person/dog proxies."""
     from obstacles import CROSSERS
 
@@ -341,7 +341,7 @@ def create_obstacle_world() -> ET.Element:
     blue = (0.15, 0.32, 0.7, 1)
     dark = (0.15, 0.17, 0.2, 1)
     brown = (0.5, 0.28, 0.12, 1)
-    for name, spec in CROSSERS.items():
+    for name, spec in (CROSSERS if crossers is None else crossers).items():
         actor = element(world, "model", name=name)
         yaw = math.copysign(math.pi / 2, spec["end_y"] - spec["start_y"])
         element(actor, "pose", (spec["x"], spec["start_y"], 0, 0, 0, yaw))
@@ -404,6 +404,164 @@ def create_obstacle_world() -> ET.Element:
     return sdf
 
 
+def create_route_world(
+    geometry: dict, config: dict, time_scale: float = 1
+) -> ET.Element:
+    from route import RoutePath
+
+    route = RoutePath(geometry, config)
+    sdf = create_obstacle_world(route.crossers())
+    world = sdf.find("world")
+    world.set("name", "tractor_route")
+    world.find("physics/real_time_factor").text = str(time_scale)
+    gui = element(world, "gui", fullscreen="false")
+    for filename, title in (
+        ("MinimalScene", "3D View"),
+        ("GzSceneManager", "Scene Manager"),
+        ("InteractiveViewControl", "Interactive view control"),
+        ("CameraTracking", "Camera Tracking"),
+        ("EntityContextMenuPlugin", "Entity context menu"),
+        ("SelectEntities", "Select Entities"),
+        ("EntityTree", "Entity tree"),
+        ("WorldControl", "World control"),
+    ):
+        entry = element(gui, "plugin", filename=filename, name=title)
+        metadata = element(entry, "gz-gui")
+        element(metadata, "title", title)
+        element(metadata, "property", "false", type="bool", key="showTitleBar")
+        element(
+            metadata,
+            "property",
+            "docked" if filename in ("MinimalScene", "EntityTree") else "floating",
+            type="string",
+            key="state",
+        )
+        if filename == "MinimalScene":
+            for tag, value in {
+                "engine": "ogre2",
+                "scene": "scene",
+                "ambient_light": "0.7 0.7 0.7",
+                "background_color": "0.68 0.8 0.9",
+                "camera_pose": "-8 -6 5 0 0.45 0.64",
+            }.items():
+                element(entry, tag, value)
+        elif filename == "CameraTracking":
+            element(entry, "follow_target", "tractor")
+            element(entry, "follow_offset", (-8, -6, 5))
+            element(entry, "follow_pgain", 0.04)
+        elif filename == "WorldControl":
+            for tag, value in {
+                "play_pause": "true",
+                "step": "true",
+                "start_paused": "false",
+                "use_event": "true",
+            }.items():
+                element(entry, tag, value)
+            anchors = element(metadata, "anchors", target="3D View")
+            element(anchors, "line", own="left", target="left")
+            element(anchors, "line", own="bottom", target="bottom")
+            element(metadata, "property", 72, type="double", key="height")
+        if filename not in ("MinimalScene", "EntityTree", "WorldControl"):
+            element(metadata, "property", 5, type="double", key="width")
+            element(metadata, "property", 5, type="double", key="height")
+    for model in list(world.findall("model")):
+        if model.attrib["name"] not in ("ground", *route.crossers()):
+            world.remove(model)
+    ground = world.find("model[@name='ground']/link")
+    for geometry_box in ground.findall("*/geometry/box/size"):
+        geometry_box.text = "180 100 0.2"
+    for pose in ground.findall("*/pose"):
+        pose.text = "60 15 -0.1 0 0 0"
+
+    scenery = element(world, "model", name="road_markings")
+    element(scenery, "static", "true")
+    link = element(scenery, "link", name="road")
+    # Visual-only pavement strips; the original floor supplies flat collisions.
+    for index, point in enumerate(route.points[::7]):
+        if point.phase.startswith("REGRESO"):
+            continue
+        visual = element(link, "visual", name=f"pavement_{index}")
+        element(visual, "pose", (point.x, point.y, 0.004, 0, 0, point.yaw))
+        box(visual, (1.15, config["layout"]["road_width_m"], 0.008))
+        material(visual, (0.33, 0.34, 0.35, 1))
+        marker = element(link, "visual", name=f"centre_{index}")
+        element(marker, "pose", (point.x, point.y, 0.01, 0, 0, point.yaw))
+        box(marker, (0.5, 0.055, 0.004))
+        material(marker, (0.94, 0.82, 0.3, 1))
+
+    def static_box(name, size, pose, color):
+        model = element(world, "model", name=name)
+        element(model, "static", "true")
+        body = element(model, "link", name="body")
+        shape_pair(body, name, "box", size, pose, color)
+        return body
+
+    width = config["layout"]["gate_width_m"]
+    for side in (-1, 1):
+        x = route.gate_x + side * (width / 2 + 0.15)
+        static_box(
+            f"gate_post_{side}",
+            (0.3, 0.25, 2.5),
+            (x, route.gate_y, 1.25, 0, 0, 0),
+            (0.8, 0.63, 0.1, 1),
+        )
+        static_box(
+            f"gate_fence_{side}",
+            (6, 0.12, 1.5),
+            (route.gate_x + side * (width / 2 + 3.3), route.gate_y, 0.75, 0, 0, 0),
+            (0.34, 0.38, 0.4, 1),
+        )
+    static_box(
+        "gate_lintel",
+        (width + 0.6, 0.25, 0.2),
+        (route.gate_x, route.gate_y, 2.6, 0, 0, 0),
+        (0.8, 0.63, 0.1, 1),
+    )
+
+    # Stadium-side fence with gaps at crossing points, trees on the opposite verge.
+    crossing_x = [spec["x"] for spec in route.crossers().values()]
+    for index, x in enumerate(range(3, 105, 3)):
+        if min(abs(x - value) for value in crossing_x) < 3:
+            continue
+        static_box(
+            f"stadium_fence_{index}",
+            (2.9, 0.1, 1.2),
+            (x, 3.2, 0.6, 0, 0, 0),
+            (0.38, 0.43, 0.4, 1),
+        )
+    for index, x in enumerate(range(8, 105, 12)):
+        if min(abs(x - value) for value in crossing_x) < 2:
+            continue
+        tree = element(world, "model", name=f"tree_{index}")
+        element(tree, "static", "true")
+        body = element(tree, "link", name="body")
+        shape_pair(
+            body,
+            "trunk",
+            "cylinder",
+            (0.18, 2.5),
+            (x, -5.0, 1.25, 0, 0, 0),
+            (0.32, 0.2, 0.1, 1),
+        )
+        shape_pair(
+            body,
+            "crown",
+            "sphere",
+            (1.25,),
+            (x, -5.0, 3, 0, 0, 0),
+            (0.14, 0.32, 0.1, 1),
+        )
+    for name, x, y, color in (
+        ("start", 0, 0, (0.1, 0.7, 0.9, 1)),
+        ("arrival", route.gate_x, route.gate_y + 5, (0.9, 0.5, 0.1, 1)),
+    ):
+        visual = element(link, "visual", name=name)
+        element(visual, "pose", (x, y, 0.015, 0, 0, 0))
+        box(visual, (0.15, 3.0, 0.005))
+        material(visual, color)
+    return sdf
+
+
 def load_parameters() -> dict:
     p = tomllib.loads((ROOT / "parameters.toml").read_text(encoding="utf-8"))
     for section in p.values():
@@ -443,6 +601,12 @@ def main() -> None:
     write_xml(ROOT / "models" / "tractor" / "model.config", config)
     write_xml(ROOT / "worlds" / "tractor_field.sdf", create_world())
     write_xml(ROOT / "worlds" / "tractor_obstacles.sdf", create_obstacle_world())
+    from route import load_route_config
+
+    write_xml(
+        ROOT / "worlds" / "tractor_route.sdf",
+        create_route_world(g, load_route_config(g)),
+    )
     (ROOT / "cad_dimensions.json").write_text(
         json.dumps(g, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
