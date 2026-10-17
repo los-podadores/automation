@@ -327,7 +327,11 @@ def main():
                 decision, vehicle = demo.tick()
                 if not connected and not demo.finished and not demo.failure:
                     decision = Decision(
-                        False, "SIN CONTROL", "Pulsa Iniciar en el visor de cámara"
+                        False,
+                        "SIN CONTROL",
+                        "Se perdió la conexión con el visor; pulsa Iniciar"
+                        if operator.receiver.received is not None
+                        else "Esperando los controles del visor de cámara",
                     )
                 operator.publish(demo, decision, vehicle)
                 time.sleep(1 / demo.parameters["publish_hz"])

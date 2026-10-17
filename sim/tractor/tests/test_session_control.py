@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from session_control import RouteOperator
+from session_control import PacketReceiver, RouteOperator
 
 
 class OperatorTests(unittest.TestCase):
@@ -22,6 +22,7 @@ class OperatorTests(unittest.TestCase):
             action=action,
             request_id=request,
             request_order=int(request.split("-")[-1]),
+            heartbeat_order=int(stamp * 1000) + int(request.split("-")[-1]),
             written_at=stamp,
         )
 
@@ -56,7 +57,7 @@ class OperatorTests(unittest.TestCase):
             patch(
                 "session_control.read_json", side_effect=[self.command(), None, None]
             ),
-            patch("session_control.time.time", side_effect=[10, 10.1, 13]),
+            patch("session_control.time.monotonic", side_effect=[10, 10.1, 13]),
         ):
             self.assertTrue(self.operator.poll(self.demo))
             self.assertTrue(self.demo.enabled)
@@ -70,9 +71,9 @@ class OperatorTests(unittest.TestCase):
             None,
             {},
             self.command(action="drive"),
-            self.command(stamp=float("nan")),
-            self.command(stamp=100),
+            self.command() | {"written_at": float("nan")},
             self.command() | {"request_order": "invalid"},
+            self.command() | {"heartbeat_order": "invalid"},
         ):
             self.demo.enabled = True
             self.assertFalse(self.operator.update(self.demo, payload, 10))
@@ -95,6 +96,25 @@ class OperatorTests(unittest.TestCase):
         self.assertTrue(self.demo.enabled)
         self.operator.update(self.demo, self.command("stop", "request-3"), 10)
         self.assertFalse(self.demo.enabled)
+
+    def test_windows_wsl_clock_skew_does_not_cancel_start(self):
+        # Real packet times can be ahead of, or behind, the other OS clock.
+        command = self.command() | {"written_at": 999999.0}
+        self.assertTrue(self.operator.update(self.demo, command, 10))
+        command = self.command(stamp=11) | {"written_at": -999999.0}
+        self.assertTrue(self.operator.update(self.demo, command, 11))
+        self.assertTrue(self.demo.enabled)
+        self.assertFalse(self.operator.update(self.demo, command, 13.1))
+        self.assertFalse(self.demo.enabled)
+
+    def test_status_packets_expire_when_their_sequence_freezes(self):
+        receiver = PacketReceiver("status_order")
+        packet = dict(status_order=100, written_at=999999.0)
+        self.assertEqual(receiver.receive(packet, 10), packet)
+        self.assertEqual(receiver.receive(packet, 11), packet)
+        self.assertIsNone(receiver.receive(packet, 12.1))
+        self.assertIsNone(receiver.receive(dict(status_order=99), 12.2))
+        self.assertIsNotNone(receiver.receive(dict(status_order=101), 12.3))
 
 
 if __name__ == "__main__":

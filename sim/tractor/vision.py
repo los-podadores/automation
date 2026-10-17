@@ -271,7 +271,10 @@ def show_window(monitor, simulation):
         panel, text="La conducción y la parada siguen usando la geometría de Gazebo."
     ).grid()
     ttk.Label(
-        panel, text="No detectar algo no significa que el camino esté libre."
+        panel,
+        text="YOLO aún no está validado con las figuras geométricas de esta escena."
+        if monitor.args.source is None
+        else "No detectar algo no significa que el camino esté libre.",
     ).grid(pady=4)
     operator = (
         OperatorClient(monitor.args.frames_dir) if monitor.args.source is None else None
@@ -337,11 +340,15 @@ def show_window(monitor, simulation):
                     start_button.configure(state="disabled")
                 else:
                     speed = route.get("speed_mps")
-                    route_status.set(
+                    route_text = (
                         f"{route['state']} · {route['reason']}\n{route['progress_m']:.1f} / {route['length_m']:.1f} m · Velocidad: {speed:.2f} m/s"
                         if speed is not None
                         else f"{route['state']} · {route['reason']}"
                     )
+                    crossing = route.get("next_crossing")
+                    if crossing is not None:
+                        route_text += f"\nPróximo cruce programado: {crossing['label']} en {crossing['distance_m']:.0f} m"
+                    route_status.set(route_text)
                     start_button.configure(
                         state="disabled"
                         if route["finished"] or route["failure"]

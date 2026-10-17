@@ -42,15 +42,22 @@ def read_json(path: Path):
         return None
 
 
-def recent(payload, now):
-    if not isinstance(payload, dict):
-        return False
-    stamp = payload.get("written_at")
-    return (
-        isinstance(stamp, (int, float))
-        and math.isfinite(stamp)
-        and -0.5 <= now - stamp <= LEASE_SECONDS
-    )
+class PacketReceiver:
+    """Expire locally observed packets; Windows/WSL wall clocks may differ."""
+
+    def __init__(self, field):
+        self.field = field
+        self.order = -1
+        self.received = None
+        self.payload = None
+
+    def receive(self, payload, now):
+        order = payload.get(self.field) if isinstance(payload, dict) else None
+        if type(order) is int and order > self.order:
+            self.order, self.received, self.payload = order, now, payload
+        if self.received is None or not 0 <= now - self.received <= LEASE_SECONDS:
+            return None
+        return self.payload
 
 
 class OperatorClient:
@@ -59,6 +66,8 @@ class OperatorClient:
         self.action = "stop"
         self.request_id = uuid.uuid4().hex
         self.request_order = time.monotonic_ns()
+        self.heartbeat_order = self.request_order
+        self.status_receiver = PacketReceiver("status_order")
 
     def send(self, action: str):
         if action not in ("start", "stop"):
@@ -68,19 +77,21 @@ class OperatorClient:
         self.heartbeat()
 
     def heartbeat(self):
+        self.heartbeat_order = max(self.heartbeat_order + 1, time.monotonic_ns())
         write_json(
             self.folder / "operator.json",
             dict(
                 action=self.action,
                 request_id=self.request_id,
                 request_order=self.request_order,
+                heartbeat_order=self.heartbeat_order,
                 written_at=time.time(),
             ),
         )
 
     def status(self):
         payload = read_json(self.folder / "route_status.json")
-        return payload if recent(payload, time.time()) else None
+        return self.status_receiver.receive(payload, time.monotonic())
 
 
 class RouteOperator:
@@ -88,18 +99,31 @@ class RouteOperator:
         self.folder = folder
         self.last_request = None
         self.last_order = -1
-        self.last_payload = None
+        self.receiver = PacketReceiver("heartbeat_order")
+        self.last_status = None
 
     def update(self, demo, payload, now):
-        valid = (
-            recent(payload, now)
+        valid = payload is None or (
+            isinstance(payload, dict)
             and payload.get("action") in ("start", "stop")
             and isinstance(payload.get("request_id"), str)
             and len(payload["request_id"]) >= 8
             and type(payload.get("request_order")) is int
             and payload["request_order"] > 0
+            and type(payload.get("heartbeat_order")) is int
+            and payload["heartbeat_order"] > 0
+            and isinstance(payload.get("written_at"), (int, float))
+            and math.isfinite(payload["written_at"])
         )
         if not valid:
+            if demo.enabled:
+                demo.stop()
+            return False
+        # Ignore older commands even if a cached file is read after a newer one.
+        if payload is not None and payload["request_order"] < self.last_order:
+            payload = None
+        payload = self.receiver.receive(payload, now)
+        if payload is None:
             if demo.enabled:
                 demo.stop()
             return False
@@ -122,30 +146,35 @@ class RouteOperator:
 
     def poll(self, demo):
         payload = read_json(self.folder / "operator.json")
-        now = time.time()
-        if payload is not None and type(payload.get("request_order")) is not int:
-            return self.update(demo, payload, now)
-        if recent(payload, now) and (
-            self.last_payload is None
-            or payload.get("request_order", -1)
-            >= self.last_payload.get("request_order", -1)
-        ):
-            self.last_payload = payload
-        # A brief NTFS read lock does not mean the operator disappeared. Retain
-        # the previous heartbeat only until its original two-second expiry.
-        if payload is None or (
-            self.last_payload is not None
-            and payload.get("request_order", -1)
-            < self.last_payload.get("request_order", -1)
-        ):
-            payload = self.last_payload
-        return self.update(demo, payload, now)
+        return self.update(demo, payload, time.monotonic())
 
     def publish(self, demo, decision, vehicle):
+        key = (decision.state, decision.reason, demo.enabled)
+        if key != self.last_status:
+            self.last_status = key
+            print(
+                json.dumps(
+                    dict(
+                        route_state=decision.state,
+                        reason=decision.reason,
+                        enabled=demo.enabled,
+                        progress_m=demo.progress,
+                    ),
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+        future = [
+            spec for spec in demo.crossers.values() if spec["trigger_s"] > demo.progress
+        ]
+        next_crossing = (
+            min(future, key=lambda spec: spec["trigger_s"]) if future else None
+        )
         write_json(
             self.folder / "route_status.json",
             dict(
                 written_at=time.time(),
+                status_order=time.monotonic_ns(),
                 state=decision.state,
                 reason=decision.reason,
                 phase=demo.phase,
@@ -158,5 +187,11 @@ class RouteOperator:
                 x_m=vehicle.x if vehicle else None,
                 y_m=vehicle.y if vehicle else None,
                 gate_crossings=len(demo.gate_crossings),
+                next_crossing=dict(
+                    label=next_crossing["label"],
+                    distance_m=next_crossing["trigger_s"] - demo.progress,
+                )
+                if next_crossing
+                else None,
             ),
         )

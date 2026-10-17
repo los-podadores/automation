@@ -292,10 +292,16 @@ No se inventa una distancia cuando la profundidad falta o es inválida.
 
 Cada ejecución crea una sesión separada en `runs/tractor_camera/<sesión>/`.
 Cerrar el visor solicita detener y cerrar solo la simulación iniciada por esa sesión.
-El visor muestra el estado del recorrido, el avance y la velocidad medida. Espacio
-detiene aunque tenga el foco el botón de inicio. Si se pierde la comunicación con
+El visor muestra el estado del recorrido, el avance y la velocidad medida.
+También indica la distancia al próximo cruce **programado** del escenario;
+esa información proviene de la ruta, no de YOLO. Los cruces de ida están cerca de
+los metros 30 (persona) y 85 (perro), y se activan unos metros antes de llegar.
+Si el tractor permanece cerca del inicio, el perro todavía no tiene por qué moverse.
+Espacio detiene aunque tenga el foco el botón de inicio. Si se pierde la comunicación con
 los controles durante más de dos segundos, el controlador ordena parar; hace falta
 volver a pulsar Iniciar para reanudar. El heartbeat no es un freno real de hardware.
+La caducidad se mide desde que cada proceso recibe una nueva secuencia, usando su
+reloj monótono local. No compara los relojes de Windows y WSL, que pueden diferir.
 Si la política de PowerShell bloquea el `.ps1`, usa el comando directo de Python;
 no necesitas cambiar la política de Windows.
 
