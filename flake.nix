@@ -77,6 +77,7 @@
           underlay = true;
           paths = [
             desktop
+            ros-gz
           ];
         };
 

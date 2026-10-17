@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Final
 
@@ -76,6 +80,37 @@ OBS_STATIC_COLOR: Final[tuple[int, int, int]] = (235, 75, 75)
 PIXELS_PER_METER: Final[float] = 14.0  # 1 meter = 14 pixels
 
 
+class GazeboBridge:
+    """Streams real-time velocity and steering commands to Gazebo Harmonic /cmd_vel topic."""
+
+    def __init__(self) -> None:
+        self.gz_bin = shutil.which("gz") or "/nix/store/bl975ygdbwh7pn8y5sglx4xxj0z7n17d-ros-env/bin/gz"
+        self.cmd_linear_x: float = 0.0
+        self.cmd_angular_z: float = 0.0
+        self.running: bool = True
+        self.connected: bool = Path(self.gz_bin).exists()
+        self.thread = threading.Thread(target=self._publish_loop, daemon=True)
+        self.thread.start()
+
+    def update_command(self, vx: float, steer_rad: float) -> None:
+        self.cmd_linear_x = vx
+        self.cmd_angular_z = steer_rad
+
+    def _publish_loop(self) -> None:
+        while self.running:
+            if self.connected:
+                msg = f"linear: {{x: {self.cmd_linear_x:.3f}}}, angular: {{z: {self.cmd_angular_z:.3f}}}"
+                cmd = [self.gz_bin, "topic", "-t", "/cmd_vel", "-m", "gz.msgs.Twist", "-p", msg]
+                try:
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.15)
+                except Exception:
+                    pass
+            time.sleep(0.05)
+
+    def stop(self) -> None:
+        self.running = False
+
+
 class CarTeleopApp:
     """Interactive GUI application for controlling the autonomous car in 3D simulation."""
 
@@ -85,12 +120,13 @@ class CarTeleopApp:
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.clock = pygame.time.Clock()
         self.backend = backend
+        self.gazebo_bridge: GazeboBridge | None = GazeboBridge() if self.backend == "gazebo" else None
 
         self.font_title = pygame.font.SysFont("monospace", 17, bold=True)
         self.font_body = pygame.font.SysFont("monospace", 13)
         self.font_small = pygame.font.SysFont("monospace", 11)
 
-        self.env = CarGazeboEnv(num_obstacles=6, track_length=90.0, road_width=5.0)
+        self.env = CarGazeboEnv(num_obstacles=4, track_length=95.0, road_width=7.0)
         self.obs, self.info = self.env.reset(seed=42)
 
         self.steer_action: float = 0.0
@@ -98,8 +134,11 @@ class CarTeleopApp:
         self.paused: bool = False
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
-        self.status_msg: str = "Initialized. Drive with WASD / Arrows."
-        self.status_timer: int = 60
+        if self.backend == "gazebo":
+            self.status_msg = "Connected to Gazebo 3D. Driving /cmd_vel."
+        else:
+            self.status_msg = "Initialized. Drive with WASD / Arrows."
+        self.status_timer: int = 75
 
     def world_to_screen(self, wx: float, wy: float, car_x: float, car_y: float) -> tuple[int, int]:
         """Convert world coordinates (meters) to screen pixel coordinates centered on car."""
@@ -364,7 +403,10 @@ class CarTeleopApp:
         self.screen.blit(title, (x, y))
         y += 24
 
-        backend_lbl = self.font_small.render(f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN", True, TEXT_MUTED)
+        if self.backend == "gazebo" and self.gazebo_bridge and self.gazebo_bridge.connected:
+            backend_lbl = self.font_small.render("BACKEND: GAZEBO 3D (ACTIVE STREAM) | ACKERMANN", True, TEXT_GREEN)
+        else:
+            backend_lbl = self.font_small.render(f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN", True, TEXT_MUTED)
         self.screen.blit(backend_lbl, (x, y))
         y += 30
 
@@ -501,6 +543,9 @@ class CarTeleopApp:
                 self.obs, reward, terminated, truncated, self.info = self.env.step(action)
                 self.total_reward += reward
 
+                if self.gazebo_bridge:
+                    self.gazebo_bridge.update_command(self.env.car_vx, self.env.car_steer)
+
                 if terminated or truncated:
                     self.obs, self.info = self.env.reset()
                     self.total_reward = 0.0
@@ -511,6 +556,9 @@ class CarTeleopApp:
 
             pygame.display.flip()
             self.clock.tick(FPS)
+
+        if self.gazebo_bridge:
+            self.gazebo_bridge.stop()
 
         pygame.quit()
 

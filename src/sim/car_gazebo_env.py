@@ -42,9 +42,9 @@ class CarGazeboEnv(gym.Env):
     def __init__(
         self,
         sim_mode: str = "mock",
-        num_obstacles: int = 6,
-        track_length: float = 90.0,
-        road_width: float = 5.0,
+        num_obstacles: int = 4,
+        track_length: float = 95.0,
+        road_width: float = 7.0,
         random_seed: int | None = None,
     ) -> None:
         super().__init__()
