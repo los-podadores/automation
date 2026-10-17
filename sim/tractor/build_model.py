@@ -64,7 +64,8 @@ def shape_pair(
     friction: float = 0.9,
 ) -> None:
     for tag in ("visual", "collision"):
-        part = element(link, tag, name=name)
+        # Gazebo's SDF validator requires unique names across child types.
+        part = element(link, tag, name=f"{name}_{tag}")
         element(part, "pose", pose)
         if shape == "box":
             box(part, dimensions)
@@ -284,7 +285,9 @@ def create_world() -> ET.Element:
         (0.20, 0.36, 0.18, 1),
     )
     include = element(world, "include")
-    element(include, "uri", "model://tractor")
+    # The launcher runs both validation and simulation from the worlds directory.
+    # A local file works without Gazebo Sim's model:// resource callback.
+    element(include, "uri", "../models/tractor/model.sdf")
     element(include, "pose", (0, 0, 0.03, 0, 0, 0))
     for name, pose, size in (
         ("obstacle_box", (6, 3, 0.5, 0, 0, 0), (1, 1, 1)),

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import shutil
+import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
@@ -104,7 +107,9 @@ class TractorModelTests(unittest.TestCase):
             self.assertGreaterEqual(clearance, -1e-6)
             self.assertLess(clearance, 0.002)
         world = create_world()
-        self.assertEqual(world.findtext("world/include/uri"), "model://tractor")
+        self.assertEqual(
+            world.findtext("world/include/uri"), "../models/tractor/model.sdf"
+        )
         self.assertTrue((ROOT / "models/tractor/model.sdf").is_file())
         self.assertEqual(world.findtext("world/physics/max_step_size"), "0.001")
 
@@ -114,6 +119,43 @@ class TractorModelTests(unittest.TestCase):
         ET.indent(saved)
         ET.indent(rebuilt)
         self.assertEqual(ET.tostring(saved), ET.tostring(rebuilt))
+
+    def test_unique_names_within_every_link(self):
+        for document in (self.model, create_world()):
+            for link in document.iter("link"):
+                with self.subTest(link=link.attrib["name"]):
+                    names = [
+                        child.attrib["name"] for child in link if "name" in child.attrib
+                    ]
+                    self.assertEqual(
+                        len(names),
+                        len(set(names)),
+                        f"Duplicate named children in {link.attrib['name']}: {names}",
+                    )
+
+
+@unittest.skipUnless(shutil.which("gz"), "Gazebo is not installed on this platform")
+class GazeboValidationTests(unittest.TestCase):
+    def validate(self, relative_path):
+        env = os.environ.copy()
+        env["GZ_SIM_RESOURCE_PATH"] = (
+            str(ROOT / "models") + os.pathsep + env.get("GZ_SIM_RESOURCE_PATH", "")
+        )
+        result = subprocess.run(
+            ["gz", "sdf", "-k", str(ROOT / relative_path)],
+            env=env,
+            cwd=ROOT / "worlds",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr)[-2000:])
+
+    def test_model_is_accepted_by_gazebo(self):
+        self.validate("models/tractor/model.sdf")
+
+    def test_world_is_accepted_by_gazebo(self):
+        self.validate("worlds/tractor_field.sdf")
 
 
 class KeyboardTests(unittest.TestCase):

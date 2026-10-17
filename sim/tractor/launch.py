@@ -89,14 +89,18 @@ def main() -> int:
         return 0
     env = simulation_environment()
     for path in (ROOT / "models/tractor/model.sdf", ROOT / "worlds/tractor_field.sdf"):
-        result = subprocess.run(["gz", "sdf", "-k", str(path)], env=env)
+        result = subprocess.run(
+            ["gz", "sdf", "-k", str(path)], env=env, cwd=ROOT / "worlds"
+        )
         if result.returncode:
             return result.returncode
     command = ["gz", "sim", "-r", "-v", "3"]
     if args.headless:
         command.append("-s")
     command.append(str(ROOT / "worlds/tractor_field.sdf"))
-    gazebo = subprocess.Popen(command, env=env, start_new_session=True)
+    gazebo = subprocess.Popen(
+        command, env=env, cwd=ROOT / "worlds", start_new_session=True
+    )
     keyboard = None
     try:
         if args.headless:

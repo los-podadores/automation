@@ -23,7 +23,7 @@
     <model name="ground">
       <static>true</static>
       <link name="ground">
-        <visual name="field">
+        <visual name="field_visual">
           <pose>0 0 -0.1 0 0 0</pose>
           <geometry>
             <box>
@@ -35,7 +35,7 @@
             <diffuse>0.2 0.36 0.18 1</diffuse>
           </material>
         </visual>
-        <collision name="field">
+        <collision name="field_collision">
           <pose>0 0 -0.1 0 0 0</pose>
           <geometry>
             <box>
@@ -54,13 +54,13 @@
       </link>
     </model>
     <include>
-      <uri>model://tractor</uri>
+      <uri>../models/tractor/model.sdf</uri>
       <pose>0 0 0.03 0 0 0</pose>
     </include>
     <model name="obstacle_box">
       <static>true</static>
       <link name="body">
-        <visual name="body">
+        <visual name="body_visual">
           <pose>6 3 0.5 0 0 0</pose>
           <geometry>
             <box>
@@ -72,7 +72,7 @@
             <diffuse>0.65 0.37 0.16 1</diffuse>
           </material>
         </visual>
-        <collision name="body">
+        <collision name="body_collision">
           <pose>6 3 0.5 0 0 0</pose>
           <geometry>
             <box>
@@ -93,7 +93,7 @@
     <model name="north_boundary">
       <static>true</static>
       <link name="body">
-        <visual name="body">
+        <visual name="body_visual">
           <pose>0 10 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -105,7 +105,7 @@
             <diffuse>0.65 0.37 0.16 1</diffuse>
           </material>
         </visual>
-        <collision name="body">
+        <collision name="body_collision">
           <pose>0 10 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -126,7 +126,7 @@
     <model name="south_boundary">
       <static>true</static>
       <link name="body">
-        <visual name="body">
+        <visual name="body_visual">
           <pose>0 -10 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -138,7 +138,7 @@
             <diffuse>0.65 0.37 0.16 1</diffuse>
           </material>
         </visual>
-        <collision name="body">
+        <collision name="body_collision">
           <pose>0 -10 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -159,7 +159,7 @@
     <model name="east_boundary">
       <static>true</static>
       <link name="body">
-        <visual name="body">
+        <visual name="body_visual">
           <pose>15 0 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -171,7 +171,7 @@
             <diffuse>0.65 0.37 0.16 1</diffuse>
           </material>
         </visual>
-        <collision name="body">
+        <collision name="body_collision">
           <pose>15 0 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -192,7 +192,7 @@
     <model name="west_boundary">
       <static>true</static>
       <link name="body">
-        <visual name="body">
+        <visual name="body_visual">
           <pose>-15 0 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -204,7 +204,7 @@
             <diffuse>0.65 0.37 0.16 1</diffuse>
           </material>
         </visual>
-        <collision name="body">
+        <collision name="body_collision">
           <pose>-15 0 0.25 0 0 0</pose>
           <geometry>
             <box>
@@ -225,7 +225,7 @@
     <model name="post_0">
       <static>true</static>
       <link name="body">
-        <visual name="post">
+        <visual name="post_visual">
           <pose>4 -3 0.4 0 0 0</pose>
           <geometry>
             <cylinder>
@@ -238,7 +238,7 @@
             <diffuse>0.9 0.3 0.05 1</diffuse>
           </material>
         </visual>
-        <collision name="post">
+        <collision name="post_collision">
           <pose>4 -3 0.4 0 0 0</pose>
           <geometry>
             <cylinder>
@@ -260,7 +260,7 @@
     <model name="post_1">
       <static>true</static>
       <link name="body">
-        <visual name="post">
+        <visual name="post_visual">
           <pose>7 -3 0.4 0 0 0</pose>
           <geometry>
             <cylinder>
@@ -273,7 +273,7 @@
             <diffuse>0.9 0.3 0.05 1</diffuse>
           </material>
         </visual>
-        <collision name="post">
+        <collision name="post_collision">
           <pose>7 -3 0.4 0 0 0</pose>
           <geometry>
             <cylinder>
@@ -295,7 +295,7 @@
     <model name="post_2">
       <static>true</static>
       <link name="body">
-        <visual name="post">
+        <visual name="post_visual">
           <pose>10 -3 0.4 0 0 0</pose>
           <geometry>
             <cylinder>
@@ -308,7 +308,7 @@
             <diffuse>0.9 0.3 0.05 1</diffuse>
           </material>
         </visual>
-        <collision name="post">
+        <collision name="post_collision">
           <pose>10 -3 0.4 0 0 0</pose>
           <geometry>
             <cylinder>

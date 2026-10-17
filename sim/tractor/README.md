@@ -150,8 +150,10 @@ uv run python sim/tractor/build_model.py
 uv run python -m unittest discover -s sim/tractor/tests -v
 ```
 
-Son comprobaciones fuera del simulador. **No prueban por sí solas que el motor
-físico, las colisiones y la interfaz gráfica funcionen en el equipo.** Después
+Si `gz` está disponible, la suite también valida el modelo y el escenario con
+`gz sdf -k`; esas dos pruebas se omiten cuando Gazebo no está instalado.
+**Estas comprobaciones no prueban por sí solas que el motor físico, las
+colisiones y la interfaz gráfica funcionen en el equipo.** Después
 de instalar Gazebo, realiza la validación física con:
 
 ```bash
