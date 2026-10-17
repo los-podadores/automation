@@ -702,39 +702,65 @@ class ProceduralTrack:
     <!-- Dynamic Obstacle {i}: {obs.name} -->
     <model name="obstacle_{i}">
       <pose>{obs.world_x:.3f} {obs.world_y:.3f} {oz:.3f} 0 0 {obs.yaw:.4f}</pose>
-      <link name="link">
-        <gravity>false</gravity>
+      <link name="slider">
         <inertial>
-          <mass>50.0</mass>
+          <mass>0.5</mass>
+          <inertia>
+            <ixx>0.01</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>0.01</iyy><iyz>0</iyz>
+            <izz>0.01</izz>
+          </inertia>
+        </inertial>
+      </link>
+      <joint name="guide" type="prismatic">
+        <parent>world</parent>
+        <child>slider</child>
+        <axis>
+          <xyz>{dir_x:.4f} {dir_y:.4f} 0</xyz>
+          <limit>
+            <lower>-0.2</lower>
+            <upper>{obs.patrol_distance + 0.2:.3f}</upper>
+          </limit>
+          <dynamics>
+            <damping>35.0</damping>
+            <friction>5.0</friction>
+          </dynamics>
+        </axis>
+      </joint>
+      <link name="link">
+        <inertial>
+          <mass>20.0</mass>
           <inertia>
             <ixx>1.0</ixx><ixy>0</ixy><ixz>0</ixz>
             <iyy>1.0</iyy><iyz>0</iyz>
-            <izz>1.0</izz>
+            <izz>0.5</izz>
           </inertia>
         </inertial>
         <collision name="collision">
           <geometry>{geom_xml}</geometry>
-          <surface>
-            <friction>
-              <ode>
-                <mu>0.01</mu>
-                <mu2>0.01</mu2>
-              </ode>
-            </friction>
-          </surface>
         </collision>
         <visual name="visual">
           <geometry>{geom_xml}</geometry>
           <material>{color_xml}</material>
         </visual>
       </link>
+      <joint name="pivot" type="revolute">
+        <parent>slider</parent>
+        <child>link</child>
+        <axis>
+          <xyz>0 0 1</xyz>
+          <dynamics>
+            <damping>3.0</damping>
+          </dynamics>
+        </axis>
+      </joint>
       <plugin
         filename="gz-sim-trajectory-follower-system"
         name="gz::sim::systems::TrajectoryFollower">
         <link_name>link</link_name>
         <loop>true</loop>
-        <force>120</force>
-        <torque>20</torque>
+        <force>45</force>
+        <torque>25</torque>
         <range_tolerance>0.3</range_tolerance>
         <waypoints>
           <waypoint>{wp1_x:.3f} {wp1_y:.3f}</waypoint>

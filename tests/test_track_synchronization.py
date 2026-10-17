@@ -93,6 +93,10 @@ class TestTrackSynchronization(unittest.TestCase):
             self.assertIn("gz-sim-contact-system", content)
             self.assertIn("gz-sim-trajectory-follower-system", content)
             self.assertIn("gz-sim-odometry-publisher-system", content)
+            self.assertIn('joint name="guide" type="prismatic"', content)
+            self.assertIn('joint name="pivot" type="revolute"', content)
+            self.assertIn("<parent>world</parent>", content)
+            self.assertIn("<damping>35.0</damping>", content)
 
     def test_tractor_sdf_contact_sensor_and_chassis_collision(self) -> None:
         """Verify tractor model SDF has chassis_body_collision and tractor_contact_sensor."""
