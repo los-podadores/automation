@@ -16,6 +16,8 @@ import numpy as np
 import gymnasium as gym
 
 from src.translate.config import (
+    CAR_LENGTH,
+    CAR_WIDTH,
     DT_SECONDS,
     MAX_ACCEL_MPSS,
     MAX_BRAKE_MPSS,
@@ -27,7 +29,11 @@ from src.translate.config import (
 from src.translate.fusion_types import GoalState
 from .mock_perception import MockPerceptionEngine
 from .spatial_map import EgoKinematics, LaserScanData, SpatialMapBuilder
-from .track_generator import ProceduralTrack, ProceduralTrackGenerator
+from .track_generator import (
+    DEFAULT_WALL_THICKNESS,
+    ProceduralTrack,
+    ProceduralTrackGenerator,
+)
 
 # Mission phase constants
 PHASE_A_TO_B: Final[int] = 0
@@ -214,38 +220,87 @@ class CarGazeboEnv(gym.Env):
 
         return ego_walls
 
+    @staticmethod
+    def _point_to_segment_dist_sq(
+        px: float, py: float, x1: float, y1: float, x2: float, y2: float
+    ) -> float:
+        dx = x2 - x1
+        dy = y2 - y1
+        l2 = dx * dx + dy * dy
+        if l2 < 1e-8:
+            return (px - x1) ** 2 + (py - y1) ** 2
+        t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / l2))
+        proj_x = x1 + t * dx
+        proj_y = y1 + t * dy
+        return (px - proj_x) ** 2 + (py - proj_y) ** 2
+
+    @staticmethod
+    def _point_to_aabb_dist_sq(px: float, py: float, hx: float, hy: float) -> float:
+        dx = max(0.0, abs(px) - hx)
+        dy = max(0.0, abs(py) - hy)
+        return dx * dx + dy * dy
+
+    @staticmethod
+    def _segment_intersects_aabb(
+        x1: float, y1: float, x2: float, y2: float, hx: float, hy: float
+    ) -> bool:
+        if abs(x1) <= hx and abs(y1) <= hy:
+            return True
+        if abs(x2) <= hx and abs(y2) <= hy:
+            return True
+        dx = x2 - x1
+        dy = y2 - y1
+        p = [-dx, dx, -dy, dy]
+        q = [x1 + hx, hx - x1, y1 + hy, hy - y1]
+        u1, u2 = 0.0, 1.0
+        for pi, qi in zip(p, q, strict=True):
+            if pi == 0.0:
+                if qi < 0.0:
+                    return False
+            elif pi < 0.0:
+                t = qi / pi
+                if t > u2:
+                    return False
+                if t > u1:
+                    u1 = t
+            else:
+                t = qi / pi
+                if t < u1:
+                    return False
+                if t < u2:
+                    u2 = t
+        return u1 <= u2
+
+    @classmethod
+    def _segment_aabb_dist(
+        cls, x1: float, y1: float, x2: float, y2: float, hx: float, hy: float
+    ) -> float:
+        if cls._segment_intersects_aabb(x1, y1, x2, y2, hx, hy):
+            return 0.0
+        d_sq = min(
+            cls._point_to_aabb_dist_sq(x1, y1, hx, hy),
+            cls._point_to_aabb_dist_sq(x2, y2, hx, hy),
+            cls._point_to_segment_dist_sq(-hx, -hy, x1, y1, x2, y2),
+            cls._point_to_segment_dist_sq(-hx, hy, x1, y1, x2, y2),
+            cls._point_to_segment_dist_sq(hx, -hy, x1, y1, x2, y2),
+            cls._point_to_segment_dist_sq(hx, hy, x1, y1, x2, y2),
+        )
+        return math.sqrt(d_sq)
+
     def _check_wall_collision(self) -> bool:
-        """Check if multi-circle vehicle footprint overlaps any wall line segment."""
+        """Check if vehicle oriented bounding box intersects wall geometry (thickness 0.30m)."""
         if not self.track:
             return False
 
-        cx, cy = self.car_x, self.car_y
-        cos_yaw = math.cos(self.car_yaw)
-        sin_yaw = math.sin(self.car_yaw)
+        hx = CAR_LENGTH / 2.0
+        hy = CAR_WIDTH / 2.0
+        # Wall box half-thickness is DEFAULT_WALL_THICKNESS / 2.0 (0.15m), plus 2cm contact margin
+        r_eff = (DEFAULT_WALL_THICKNESS / 2.0) + 0.02
 
-        # 3 overlapping bounding circles covering 3.0m x 1.67m tractor footprint
-        centers = [
-            (cx + 0.8 * cos_yaw, cy + 0.8 * sin_yaw),
-            (cx, cy),
-            (cx - 0.8 * cos_yaw, cy - 0.8 * sin_yaw),
-        ]
-        r_sq = 0.85**2
-
-        for (x1, y1), (x2, y2) in self.track.wall_segments:
-            dx = x2 - x1
-            dy = y2 - y1
-            seg_len_sq = dx * dx + dy * dy
-            if seg_len_sq < 1e-4:
-                continue
-
-            for ccx, ccy in centers:
-                t = max(0.0, min(1.0, ((ccx - x1) * dx + (ccy - y1) * dy) / seg_len_sq))
-                closest_x = x1 + t * dx
-                closest_y = y1 + t * dy
-
-                dist_sq = (ccx - closest_x) ** 2 + (ccy - closest_y) ** 2
-                if dist_sq < r_sq:
-                    return True
+        ego_walls = self._transform_walls_to_ego()
+        for (x1, y1), (x2, y2) in ego_walls:
+            if self._segment_aabb_dist(x1, y1, x2, y2, hx, hy) <= r_eff:
+                return True
 
         return False
 
@@ -340,6 +395,11 @@ class CarGazeboEnv(gym.Env):
             "phase": self.mission_phase,
             "pose": self.pose,
             "dist_to_goal": goal_state.distance,
+            "speed": self.car_vx,
+            "lidar_source": "ros_gz" if (self.sim_mode == "gazebo" and len(self._current_scans) > 0) else "mock",
+            "active_pods": len(self._current_scans) if self.sim_mode == "gazebo" else 4,
+            "raw_lidar_points_ego": self.latest_raw_lidar_points_ego,
+            "raw_pod_beams": self.latest_raw_pod_beams,
         }
         return obs, info
 
@@ -476,22 +536,19 @@ class CarGazeboEnv(gym.Env):
         # 5. Collision Checks
         wall_collision = self._check_wall_collision()
         obstacle_collision = False
-        if self.track:
+        if self.track and self.track.obstacles:
             cos_y = math.cos(self.car_yaw)
             sin_y = math.sin(self.car_yaw)
-            car_centers = [
-                (self.car_x + 0.8 * cos_y, self.car_y + 0.8 * sin_y),
-                (self.car_x, self.car_y),
-                (self.car_x - 0.8 * cos_y, self.car_y - 0.8 * sin_y),
-            ]
+            hx = CAR_LENGTH / 2.0
+            hy = CAR_WIDTH / 2.0
             for obs in self.track.obstacles:
-                r_obs = obs.radius
-                for ccx, ccy in car_centers:
-                    dist = math.hypot(obs.world_x - ccx, obs.world_y - ccy)
-                    if dist < (0.85 + r_obs):
-                        obstacle_collision = True
-                        break
-                if obstacle_collision:
+                dx = obs.world_x - self.car_x
+                dy = obs.world_y - self.car_y
+                ex = dx * cos_y + dy * sin_y
+                ey = -dx * sin_y + dy * cos_y
+                dist_to_box = math.sqrt(self._point_to_aabb_dist_sq(ex, ey, hx, hy))
+                if dist_to_box <= (obs.radius + 0.02):
+                    obstacle_collision = True
                     break
 
         if self.sim_mode == "gazebo" and self.ros_bridge is not None:
@@ -557,8 +614,9 @@ class CarGazeboEnv(gym.Env):
             "speed": self.car_vx,
             "dist_to_goal": curr_dist,
             "lidar_source": "ros_gz" if (self.sim_mode == "gazebo" and len(self._current_scans) > 0) else "mock",
-            "active_pods": len(self._current_scans) if self.sim_mode == "gazebo" else 0,
+            "active_pods": len(self._current_scans) if self.sim_mode == "gazebo" else 4,
             "raw_lidar_points_ego": self.latest_raw_lidar_points_ego,
+            "raw_pod_beams": self.latest_raw_pod_beams,
         }
         return obs, float(reward), terminated, truncated, info
 
@@ -567,7 +625,32 @@ class CarGazeboEnv(gym.Env):
         """Raw (N, 2) Cartesian hit points in ego coordinates from live 4-pod LiDARs."""
         if self.sim_mode == "gazebo" and self._current_scans:
             return self.map_builder.extract_point_cloud_ego(self._current_scans)
+        if self.map_builder.latest_mock_pod_scans:
+            return self.map_builder.extract_point_cloud_ego(self.map_builder.latest_mock_pod_scans)
         return np.empty((0, 2), dtype=np.float32)
+
+    @property
+    def latest_raw_pod_beams(self) -> list[dict[str, Any]]:
+        """Physical ray beam segments per sensor pod with exact mounting origins."""
+        tracked_obs = (
+            self.mock_perception.filter_and_noise(
+                self.car_x,
+                self.car_y,
+                self.car_yaw,
+                self.track.obstacles if self.track else [],
+            )
+            if self.track
+            else []
+        )
+        if self.sim_mode == "gazebo" and self._current_scans:
+            return self.map_builder.extract_pod_beam_segments(
+                self._current_scans, obstacles=tracked_obs
+            )
+        if self.map_builder.latest_mock_pod_scans:
+            return self.map_builder.extract_pod_beam_segments(
+                self.map_builder.latest_mock_pod_scans, obstacles=tracked_obs
+            )
+        return []
 
     def close(self) -> None:
         if self.ros_bridge is not None:

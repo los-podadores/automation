@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 
@@ -27,6 +27,41 @@ POD_CONFIGS: Final[dict[str, tuple[float, float, float]]] = {
     "rear": (-1.05, 0.0, math.pi),
     "right": (0.50, -0.70, -math.pi / 2.0),
     "left": (0.50, 0.70, math.pi / 2.0),
+}
+
+POD_SPECS: Final[dict[str, dict[str, float | int]]] = {
+    "front": {
+        "x": 1.05,
+        "y": 0.0,
+        "yaw": 0.0,
+        "samples": 180,
+        "angle_min": -1.047198,
+        "angle_max": 1.047198,
+    },
+    "rear": {
+        "x": -1.05,
+        "y": 0.0,
+        "yaw": math.pi,
+        "samples": 180,
+        "angle_min": -1.047198,
+        "angle_max": 1.047198,
+    },
+    "right": {
+        "x": 0.50,
+        "y": -0.70,
+        "yaw": -math.pi / 2.0,
+        "samples": 150,
+        "angle_min": -0.872665,
+        "angle_max": 0.872665,
+    },
+    "left": {
+        "x": 0.50,
+        "y": 0.70,
+        "yaw": math.pi / 2.0,
+        "samples": 150,
+        "angle_min": -0.872665,
+        "angle_max": 0.872665,
+    },
 }
 
 
@@ -72,6 +107,7 @@ class SpatialMapBuilder:
         self.max_range = max_range
         # Angles for each ray center covering full 360 degrees: [-pi, +pi)
         self.ray_angles = np.linspace(-math.pi, math.pi, self.num_rays, endpoint=False)
+        self.latest_mock_pod_scans: dict[str, LaserScanData] = {}
 
     def fuse_pod_scans(
         self,
@@ -165,6 +201,140 @@ class SpatialMapBuilder:
         if all_pts:
             return np.vstack(all_pts).astype(np.float32)
         return np.empty((0, 2), dtype=np.float32)
+
+    def extract_pod_beam_segments(
+        self,
+        pod_scans: dict[str, LaserScanData],
+        obstacles: list[TrackedObstacle] | None = None,
+        stride: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Extract physical LiDAR rays originating from each physical pod's mounting position.
+
+        Returns a list of dictionaries per pod:
+            {
+                "pod_name": str,
+                "origin_ego": (float, float),
+                "endpoints_ego": np.ndarray (N, 2),
+                "ranges": np.ndarray (N,),
+                "classes": np.ndarray (N,),
+                "is_hit": np.ndarray (N,),
+            }
+        """
+        pod_results: list[dict[str, Any]] = []
+        for pod_name, scan in pod_scans.items():
+            if pod_name not in POD_CONFIGS or len(scan.ranges) == 0:
+                continue
+            x_pod, y_pod, yaw_pod = POD_CONFIGS[pod_name]
+            raw_ranges = np.asarray(scan.ranges, dtype=np.float32)
+            n_samples = len(raw_ranges)
+            angles = scan.angle_min + np.arange(n_samples, dtype=np.float32) * scan.angle_increment
+
+            if stride > 1:
+                raw_ranges = raw_ranges[::stride]
+                angles = angles[::stride]
+
+            beam_endpoints: list[tuple[float, float]] = []
+            beam_classes: list[int] = []
+            beam_hits: list[bool] = []
+            beam_eff_r: list[float] = []
+
+            for r, ang in zip(raw_ranges, angles):
+                total_angle = yaw_pod + float(ang)
+                if np.isfinite(r) and scan.range_min <= r <= self.max_range:
+                    eff_r = float(r)
+                    is_hit = True
+                    xe = x_pod + eff_r * math.cos(total_angle)
+                    ye = y_pod + eff_r * math.sin(total_angle)
+                    hit_cls = CLASS_STATIC_HAZARD
+                    if obstacles:
+                        for obs in obstacles:
+                            if math.hypot(xe - obs.rel_x, ye - obs.rel_y) <= (obs.radius + 0.35):
+                                hit_cls = obs.to_spatial_code()
+                                break
+                else:
+                    eff_r = float(self.max_range)
+                    is_hit = False
+                    xe = x_pod + eff_r * math.cos(total_angle)
+                    ye = y_pod + eff_r * math.sin(total_angle)
+                    hit_cls = CLASS_FREE
+
+                beam_endpoints.append((xe, ye))
+                beam_classes.append(hit_cls)
+                beam_hits.append(is_hit)
+                beam_eff_r.append(eff_r)
+
+            pod_results.append({
+                "pod_name": pod_name,
+                "origin_ego": (x_pod, y_pod),
+                "endpoints_ego": np.array(beam_endpoints, dtype=np.float32),
+                "ranges": np.array(beam_eff_r, dtype=np.float32),
+                "classes": np.array(beam_classes, dtype=np.int32),
+                "is_hit": np.array(beam_hits, dtype=bool),
+            })
+        return pod_results
+
+    def generate_mock_pod_scans(
+        self,
+        wall_segments_ego: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
+        obstacles: list[TrackedObstacle] | None = None,
+    ) -> dict[str, LaserScanData]:
+        """Synthesize 4-pod LaserScanData analytically from physical pod locations."""
+        scans: dict[str, LaserScanData] = {}
+        for pod_name, spec in POD_SPECS.items():
+            n_samples = int(spec["samples"])
+            ang_min = float(spec["angle_min"])
+            ang_max = float(spec["angle_max"])
+            ang_inc = (ang_max - ang_min) / max(1, n_samples - 1)
+            x_pod = float(spec["x"])
+            y_pod = float(spec["y"])
+            yaw_pod = float(spec["yaw"])
+
+            ranges = np.full(n_samples, self.max_range, dtype=np.float32)
+
+            for i in range(n_samples):
+                beam_ang = yaw_pod + ang_min + i * ang_inc
+                dx = math.cos(beam_ang)
+                dy = math.sin(beam_ang)
+
+                # Cast against walls
+                if wall_segments_ego:
+                    for (wx1, wy1), (wx2, wy2) in wall_segments_ego:
+                        sx = wx2 - wx1
+                        sy = wy2 - wy1
+                        det = sx * dy - sy * dx
+                        if abs(det) < 1e-6:
+                            continue
+                        del_x = wx1 - x_pod
+                        del_y = wy1 - y_pod
+                        t = (sx * del_y - sy * del_x) / det
+                        u = (dx * del_y - dy * del_x) / det
+                        if t > 0.0 and 0.0 <= u <= 1.0 and t < ranges[i]:
+                            ranges[i] = t
+
+                # Cast against obstacles
+                if obstacles:
+                    for obs in obstacles:
+                        del_x = obs.rel_x - x_pod
+                        del_y = obs.rel_y - y_pod
+                        proj = del_x * dx + del_y * dy
+                        if proj <= 0.0:
+                            continue
+                        h_sq = (del_x * del_x + del_y * del_y) - proj * proj
+                        r_sq = obs.radius * obs.radius
+                        if h_sq <= r_sq:
+                            t = proj - math.sqrt(max(0.0, r_sq - h_sq))
+                            if 0.0 < t < ranges[i]:
+                                ranges[i] = t
+
+            scans[pod_name] = LaserScanData(
+                ranges=ranges,
+                angle_min=ang_min,
+                angle_max=ang_max,
+                angle_increment=ang_inc,
+                range_min=0.15,
+                range_max=self.max_range,
+            )
+        return scans
 
     def compute_ray_scan(
         self,
@@ -265,6 +435,13 @@ class SpatialMapBuilder:
 
         if pod_scans is not None and len(pod_scans) > 0:
             dist_arr, cls_arr = self.fuse_pod_scans(pod_scans, obstacles=obstacles)
+        elif wall_segments_ego is not None:
+            mock_scans = self.generate_mock_pod_scans(
+                wall_segments_ego=wall_segments_ego,
+                obstacles=obstacles,
+            )
+            self.latest_mock_pod_scans = mock_scans
+            dist_arr, cls_arr = self.fuse_pod_scans(mock_scans, obstacles=obstacles)
         else:
             dist_arr, cls_arr = self.compute_ray_scan(
                 obstacles if obstacles is not None else [],

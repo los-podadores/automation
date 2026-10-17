@@ -156,6 +156,57 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         zero_bin = int(math.floor((0.0 + math.pi) / (2.0 * math.pi / 72))) % 72
         self.assertEqual(classes[zero_bin], float(CLASS_PEDESTRIAN))
 
+    def test_extract_pod_beam_segments_origins_and_endpoints(self) -> None:
+        from src.translate.fusion_types import CLASS_PEDESTRIAN, TrackedObstacle
+
+        samples = 180
+        ranges = np.full(samples, 15.0, dtype=np.float32)
+        ranges[samples // 2] = 2.0  # Hit 2m ahead of front pod at x=1.05 -> ego x=3.05, y=0.0
+        pod_scans = {
+            "front": LaserScanData(
+                ranges=ranges,
+                angle_min=-1.047198,
+                angle_max=1.047198,
+                angle_increment=2.094396 / samples,
+            )
+        }
+        ped = TrackedObstacle(
+            class_id=CLASS_PEDESTRIAN,
+            class_name="person",
+            rel_x=3.05,
+            rel_y=0.0,
+            rel_vx=0.0,
+            rel_vy=0.0,
+            radius=0.45,
+            confidence=0.99,
+        )
+        beam_data = self.builder.extract_pod_beam_segments(pod_scans, obstacles=[ped])
+        self.assertEqual(len(beam_data), 1)
+        pod = beam_data[0]
+        self.assertEqual(pod["pod_name"], "front")
+        self.assertEqual(pod["origin_ego"], (1.05, 0.0))
+        self.assertEqual(len(pod["endpoints_ego"]), samples)
+
+        center_idx = samples // 2
+        self.assertTrue(pod["is_hit"][center_idx])
+        self.assertEqual(pod["classes"][center_idx], CLASS_PEDESTRIAN)
+        self.assertAlmostEqual(pod["endpoints_ego"][center_idx][0], 3.05, places=2)
+        self.assertAlmostEqual(pod["endpoints_ego"][center_idx][1], 0.0, places=2)
+
+    def test_generate_mock_pod_scans(self) -> None:
+        # Place a wall 5m ahead of the car (x=5.0) spanning y in [-10, 10]
+        wall_ego = [((5.0, -10.0), (5.0, 10.0))]
+        mock_scans = self.builder.generate_mock_pod_scans(wall_segments_ego=wall_ego)
+        self.assertIn("front", mock_scans)
+        self.assertIn("rear", mock_scans)
+        self.assertIn("right", mock_scans)
+        self.assertIn("left", mock_scans)
+
+        # Front pod is at x=1.05m facing forward -> distance to x=5.0 wall is 5.0 - 1.05 = 3.95m
+        front_scan = mock_scans["front"]
+        center_sample = front_scan.ranges[len(front_scan.ranges) // 2]
+        self.assertAlmostEqual(center_sample, 3.95, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

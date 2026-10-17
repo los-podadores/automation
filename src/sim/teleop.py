@@ -47,6 +47,11 @@ VIEW_W: Final[int] = 880
 PANEL_W: Final[int] = 400
 FPS: Final[int] = 30
 
+# LiDAR Display Modes
+LIDAR_MODE_PHYSICAL_BEAMS: Final[str] = "physical"
+LIDAR_MODE_POLICY_GRID: Final[str] = "policy"
+LIDAR_MODE_POINT_CLOUD: Final[str] = "point_cloud"
+
 # Colors (Dark Modern Theme)
 BG_COLOR: Final[tuple[int, int, int]] = (18, 22, 28)
 PANEL_BG: Final[tuple[int, int, int]] = (26, 32, 42)
@@ -100,9 +105,10 @@ class CarTeleopApp:
         self.steer_action: float = 0.0
         self.throttle_action: float = 0.0
         self.paused: bool = False
-        self.show_raw_point_cloud: bool = True
+        self.lidar_render_mode: str = LIDAR_MODE_PHYSICAL_BEAMS
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
+        self.collision_flash_timer: int = 0
         if self.backend == "gazebo":
             self.status_msg = f"Gazebo 3D | Preset: {self.preset}"
         else:
@@ -128,9 +134,16 @@ class CarTeleopApp:
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     return False
                 if event.key == pygame.K_l:
-                    self.show_raw_point_cloud = not self.show_raw_point_cloud
-                    mode_str = "High-Res Point Cloud" if self.show_raw_point_cloud else "72 Policy Bins"
-                    self.status_msg = f"LiDAR Render Mode: {mode_str}"
+                    if self.lidar_render_mode == LIDAR_MODE_PHYSICAL_BEAMS:
+                        self.lidar_render_mode = LIDAR_MODE_POLICY_GRID
+                        mode_str = "RL Policy Bins (72-Ray Centered Grid)"
+                    elif self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
+                        self.lidar_render_mode = LIDAR_MODE_POINT_CLOUD
+                        mode_str = "Contact Point Cloud (Hits Only)"
+                    else:
+                        self.lidar_render_mode = LIDAR_MODE_PHYSICAL_BEAMS
+                        mode_str = "Physical LiDAR Beams (4 Pod Mounting Origins)"
+                    self.status_msg = f"LiDAR: {mode_str}"
                     self.status_timer = 50
                 if event.key == pygame.K_r:
                     self.obs, self.info = self.env.reset()
@@ -259,47 +272,81 @@ class CarTeleopApp:
             ]
             pygame.draw.lines(self.screen, (60, 130, 90), False, trail_pts, 2)
 
-        # 5. Draw 360-degree LiDAR Radar Rays & High-Res Returns
-        # Observation layout: distances are [12:84], classes are [84:156]
-        norm_dists = self.obs[12:84]
-        hit_classes = self.obs[84:156]
-        ray_angles = np.linspace(-math.pi, math.pi, LIDAR_NUM_RAYS, endpoint=False)
+        # 5. Draw 360-degree LiDAR Returns (Physical Beams / Policy Bins / Point Cloud)
+        cos_y = math.cos(car_yaw)
+        sin_y = math.sin(car_yaw)
 
-        car_screen = self.world_to_screen(car_x, car_y, car_x, car_y)
+        if self.lidar_render_mode == LIDAR_MODE_PHYSICAL_BEAMS:
+            # 5a. Physical LiDAR Beams: originating from the 4 actual hardware pod mounting locations!
+            pod_beams = self.info.get("raw_pod_beams", None)
+            if pod_beams is None or len(pod_beams) == 0:
+                pod_beams = getattr(self.env, "latest_raw_pod_beams", [])
 
-        # 5a. Policy observation rays (subtle lines indicating the 72 RL spatial sectors)
-        for i in range(LIDAR_NUM_RAYS):
-            r_dist = float(norm_dists[i]) * LIDAR_MAX_RANGE
-            r_ang = float(ray_angles[i]) + car_yaw
-            end_wx = car_x + r_dist * math.cos(r_ang)
-            end_wy = car_y + r_dist * math.sin(r_ang)
-            end_screen = self.world_to_screen(end_wx, end_wy, car_x, car_y)
+            for pod in pod_beams:
+                x_pod, y_pod = pod["origin_ego"]
+                origin_wx = car_x + x_pod * cos_y - y_pod * sin_y
+                origin_wy = car_y + x_pod * sin_y + y_pod * cos_y
+                origin_screen = self.world_to_screen(origin_wx, origin_wy, car_x, car_y)
 
-            h_cls = int(hit_classes[i])
-            if h_cls == CLASS_FREE:
-                color = (25, 45, 35)
-            elif h_cls == CLASS_VEHICLE:
-                color = OBS_VEHICLE_COLOR
-            elif h_cls == CLASS_PEDESTRIAN:
-                color = OBS_PED_COLOR
-            else:
-                color = (150, 45, 45) if self.show_raw_point_cloud else WALL_COLOR
+                endpoints_ego = pod["endpoints_ego"]
+                classes = pod["classes"]
+                is_hit = pod["is_hit"]
 
-            pygame.draw.line(self.screen, color, car_screen, end_screen, 1)
+                for (xe, ye), h_cls, hit in zip(endpoints_ego, classes, is_hit):
+                    end_wx = car_x + xe * cos_y - ye * sin_y
+                    end_wy = car_y + xe * sin_y + ye * cos_y
+                    end_screen = self.world_to_screen(end_wx, end_wy, car_x, car_y)
 
-        # 5b. Live ROS 2 LiDAR point cloud hits from 4 sensor pods
-        raw_pts = self.info.get("raw_lidar_points_ego", None)
-        if raw_pts is None or len(raw_pts) == 0:
-            raw_pts = getattr(self.env, "latest_raw_lidar_points_ego", np.empty((0, 2)))
+                    if hit:
+                        if h_cls == CLASS_VEHICLE:
+                            color = OBS_VEHICLE_COLOR
+                        elif h_cls == CLASS_PEDESTRIAN:
+                            color = OBS_PED_COLOR
+                        else:
+                            color = WALL_COLOR
+                        pygame.draw.line(self.screen, color, origin_screen, end_screen, 1)
+                        pygame.draw.circle(self.screen, color, end_screen, 2)
+                    else:
+                        # Subtle unoccluded beam
+                        pygame.draw.line(self.screen, (22, 38, 30), origin_screen, end_screen, 1)
 
-        if len(raw_pts) > 0 and self.show_raw_point_cloud:
-            cos_y = math.cos(car_yaw)
-            sin_y = math.sin(car_yaw)
-            wx_pts = car_x + raw_pts[:, 0] * cos_y - raw_pts[:, 1] * sin_y
-            wy_pts = car_y + raw_pts[:, 0] * sin_y + raw_pts[:, 1] * cos_y
-            for wx, wy in zip(wx_pts, wy_pts):
-                sp = self.world_to_screen(wx, wy, car_x, car_y)
-                pygame.draw.circle(self.screen, (255, 95, 85), sp, 2)
+        elif self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
+            # 5b. Policy observation rays (72 ego-centroid spatial sectors around vehicle center)
+            car_screen = self.world_to_screen(car_x, car_y, car_x, car_y)
+            norm_dists = self.obs[12:84]
+            hit_classes = self.obs[84:156]
+            ray_angles = np.linspace(-math.pi, math.pi, LIDAR_NUM_RAYS, endpoint=False)
+            for i in range(LIDAR_NUM_RAYS):
+                r_dist = float(norm_dists[i]) * LIDAR_MAX_RANGE
+                r_ang = float(ray_angles[i]) + car_yaw
+                end_wx = car_x + r_dist * math.cos(r_ang)
+                end_wy = car_y + r_dist * math.sin(r_ang)
+                end_screen = self.world_to_screen(end_wx, end_wy, car_x, car_y)
+
+                h_cls = int(hit_classes[i])
+                if h_cls == CLASS_FREE:
+                    color = (25, 45, 35)
+                elif h_cls == CLASS_VEHICLE:
+                    color = OBS_VEHICLE_COLOR
+                elif h_cls == CLASS_PEDESTRIAN:
+                    color = OBS_PED_COLOR
+                else:
+                    color = WALL_COLOR
+
+                pygame.draw.line(self.screen, color, car_screen, end_screen, 1)
+
+        else:
+            # 5c. High-Resolution Contact Point Cloud Only
+            raw_pts = self.info.get("raw_lidar_points_ego", None)
+            if raw_pts is None or len(raw_pts) == 0:
+                raw_pts = getattr(self.env, "latest_raw_lidar_points_ego", np.empty((0, 2)))
+
+            if len(raw_pts) > 0:
+                wx_pts = car_x + raw_pts[:, 0] * cos_y - raw_pts[:, 1] * sin_y
+                wy_pts = car_y + raw_pts[:, 0] * sin_y + raw_pts[:, 1] * cos_y
+                for wx, wy in zip(wx_pts, wy_pts):
+                    sp = self.world_to_screen(wx, wy, car_x, car_y)
+                    pygame.draw.circle(self.screen, (255, 95, 85), sp, 2)
 
         # 6. Draw Obstacles (Box/Cylinder, Static/Dynamic)
         if self.env.track:
@@ -439,18 +486,28 @@ class CarTeleopApp:
             pygame.draw.polygon(self.screen, TIRE_COLOR, scr_w_pts)
             pygame.draw.polygon(self.screen, (80, 80, 90), scr_w_pts, 1)
 
-        # Draw 4 Sensor Pod Indicators
+        # Draw 4 Sensor Pod Indicators (Exact physical CAD mounting locations)
         pod_offsets = [
-            (+1.90, 0.0, (50, 220, 100)),  # Front
-            (-1.90, 0.0, (220, 50, 50)),  # Rear
-            (+1.00, -0.95, (50, 180, 240)),  # Right
-            (+1.00, +0.95, (50, 180, 240)),  # Left
+            (+1.05, 0.0, (50, 220, 100), "F"),   # Front bumper
+            (-1.05, 0.0, (220, 50, 50), "R"),    # Rear hitch
+            (+0.50, -0.70, (50, 180, 240), "R"), # Right flank
+            (+0.50, +0.70, (50, 180, 240), "L"), # Left flank
         ]
-        for px, py, col in pod_offsets:
+        for px, py, col, _ in pod_offsets:
             p_wx = car_x + px * cos_y - py * sin_y
             p_wy = car_y + px * sin_y + py * cos_y
             p_scr = self.world_to_screen(p_wx, p_wy, car_x, car_y)
+            pygame.draw.circle(self.screen, (15, 20, 26), p_scr, 6)
             pygame.draw.circle(self.screen, col, p_scr, 4)
+            pygame.draw.circle(self.screen, (255, 255, 255), p_scr, 1)
+
+        # 7. Collision Alert Visual Overlay
+        if self.info.get("collision") or self.collision_flash_timer > 0:
+            pygame.draw.rect(
+                self.screen, (220, 45, 45), (0, 0, VIEW_W, WINDOW_H), 8
+            )
+            warn_lbl = self.font_title.render("COLLISION DETECTED!", True, (255, 60, 60))
+            self.screen.blit(warn_lbl, (VIEW_W // 2 - warn_lbl.get_width() // 2, 24))
 
     def draw_hud(self) -> None:
         """Render side panel with instrumentation, 360-degree radar minimap, and controls."""
@@ -528,11 +585,12 @@ class CarTeleopApp:
         y += 50
 
         # Metrics Table
+        is_colliding = bool(self.info.get("collision")) or (self.collision_flash_timer > 0)
         metrics = [
             f"Distance to Target: {goal_dist:5.1f} m",
             f"Heading:            {math.degrees(self.env.car_yaw):+5.1f}°",
             f"Yaw Rate:           {math.degrees(self.env.car_yaw_rate):+5.1f}°/s",
-            f"Collision Status:   {'COLLISION!' if self.info.get('collision') else 'CLEAR'}",
+            f"Collision Status:   {'COLLISION!' if is_colliding else 'CLEAR'}",
             f"Simulation Steps:   {self.env.step_count:d}",
         ]
         for m in metrics:
@@ -585,7 +643,7 @@ class CarTeleopApp:
         if raw_pts is None or len(raw_pts) == 0:
             raw_pts = getattr(self.env, "latest_raw_lidar_points_ego", np.empty((0, 2)))
 
-        if len(raw_pts) > 0 and self.show_raw_point_cloud:
+        if len(raw_pts) > 0 and self.lidar_render_mode != LIDAR_MODE_POLICY_GRID:
             dists = np.hypot(raw_pts[:, 0], raw_pts[:, 1])
             valid = dists <= LIDAR_MAX_RANGE
             d_norm = dists[valid] / LIDAR_MAX_RANGE
@@ -620,9 +678,22 @@ class CarTeleopApp:
                 f"ROS 2 LiDAR ({n_pods}p, {n_hits}pts)", True, TEXT_CYAN
             )
         else:
-            radar_lbl = self.font_small.render("360° LIDAR (15m)", True, TEXT_MUTED)
-        self.screen.blit(radar_lbl, (radar_cx - 55, radar_cy + radar_rad + 6))
-        y += 170
+            radar_lbl = self.font_small.render("360° LIDAR (4 Pods, 15m)", True, TEXT_MUTED)
+        self.screen.blit(radar_lbl, (radar_cx - 65, radar_cy + radar_rad + 6))
+
+        # Mode Indicator
+        if self.lidar_render_mode == LIDAR_MODE_PHYSICAL_BEAMS:
+            mode_badge = "VIEW: PHYSICAL BEAMS (4-Pod Chassis Origins)"
+            mode_col = TEXT_CYAN
+        elif self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
+            mode_badge = "VIEW: RL POLICY BINS (72-Ray Centered Grid)"
+            mode_col = TEXT_YELLOW
+        else:
+            mode_badge = "VIEW: CONTACT POINT CLOUD (660 Hits)"
+            mode_col = (255, 120, 100)
+        mode_txt = self.font_small.render(mode_badge, True, mode_col)
+        self.screen.blit(mode_txt, (x, radar_cy + radar_rad + 24))
+        y += 185
 
         # Status Message Banner
         if self.status_timer > 0:
@@ -642,7 +713,7 @@ class CarTeleopApp:
             "  [A / D]  Steer Left / Right (Ackermann)",
             "  [Space]  Handbrake (instant stop)",
             "  [Tab]    Cycle Phase (A->B, Hold, B->A)",
-            "  [L]      Toggle High-Res LiDAR Cloud",
+            "  [L]      LiDAR View: Physical / Policy / Cloud",
             "  [N]      Generate New Procedural Track",
             "  [E]      Export Track to Gazebo 3D SDF",
             "  [R]      Reset Vehicle & Track",
@@ -711,9 +782,20 @@ class CarTeleopApp:
                 )
                 self.total_reward += reward
 
+                if self.info.get("collision"):
+                    self.collision_flash_timer = 45  # 1.5s visual latch at 30 FPS
+                    self.status_msg = "CRASH DETECTED! Collision registered."
+                    self.status_timer = 60
+                elif self.collision_flash_timer > 0:
+                    self.collision_flash_timer -= 1
+
                 if terminated or truncated:
                     if self.backend == "sim":
+                        was_collision = bool(self.info.get("collision"))
                         self.obs, self.info = self.env.reset()
+                        if was_collision:
+                            self.info["collision"] = True
+                            self.collision_flash_timer = 45
                         self.total_reward = 0.0
                         self.trail.clear()
                     else:

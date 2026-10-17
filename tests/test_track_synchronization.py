@@ -125,10 +125,64 @@ class TestTrackSynchronization(unittest.TestCase):
 
             # Position car near a wall where center is >1.15m away but front bumper hits
             # Road width is 7.0m, wall is at y = 3.5m. Center at y = 2.2m (dist=1.3m > 1.15m)
-            # With car_yaw = 60 degrees, front reaches y = 2.2 + 0.8 * sin(60 deg) = 2.2 + 0.69 = 2.89m
-            # Distance from front center (2.89) to wall (3.5) is 0.61m < 0.85m -> COLLISION!
+            # With car_yaw = 60 degrees, front reaches y = 2.2 + 1.45 * sin(60 deg) + 0.86 * cos(60 deg) = 3.89m > 3.5m
             env.car_x = 10.0
             env.car_y = 2.2
             env.car_yaw = math.radians(60.0)
 
             self.assertTrue(env._check_wall_collision())
+
+    def test_parallel_wall_collision_at_physical_envelope(self) -> None:
+        """Verify tractor side collision triggers exactly at physical contact (car half-width 0.86m + wall half-thickness 0.15m = 1.01m)."""
+        track = self.gen.generate_demo_90deg(seed=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "track.json"
+            track.export_json(json_path)
+            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
+            env.reset(options={"track": track})
+
+            # Road width is 7.0m, straight segment has left wall at y = +3.5m
+            # Physical wall surface is at 3.50 - 0.15 = 3.35m.
+            # Tractor right outer tire/envelope is at car_y + 0.86m.
+            # Contact occurs when car_y = 3.35 - 0.86 = 2.49m (centerline distance = 1.01m).
+            env.car_x = 10.0
+            env.car_yaw = 0.0
+
+            # Safe in center of road
+            env.car_y = 0.0
+            self.assertFalse(env._check_wall_collision())
+
+            # Touching the wall surface (car_y = 2.50m -> envelope outer edge at 3.36m, distance to wall = 0.14m <= 0.17m r_eff)
+            env.car_y = 2.50
+            self.assertTrue(env._check_wall_collision())
+
+            # Grinding into the wall (car_y = 2.60m)
+            env.car_y = 2.60
+            self.assertTrue(env._check_wall_collision())
+
+    def test_obstacle_collision_at_physical_envelope(self) -> None:
+        """Verify obstacle collision triggers when vehicle bounding box contacts obstacle perimeter."""
+        track = self.gen.generate_demo_90deg(seed=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "track.json"
+            track.export_json(json_path)
+            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
+            env.reset(options={"track": track})
+
+            # Place car at origin heading along +X
+            env.car_x = 10.0
+            env.car_y = 0.0
+            env.car_yaw = 0.0
+
+            # Front bumper is at x = 10.0 + 1.45 = 11.45m
+            # Put obstacle of radius 0.50m touching front bumper: center at x = 11.45 + 0.50 = 11.95m
+            obs = track.obstacles[0]
+            obs.world_x = 11.94
+            obs.world_y = 0.0
+            obs.radius = 0.50
+
+            action = np.array([0.0, 0.0], dtype=np.float32)
+            _, _, terminated, _, info = env.step(action)
+            self.assertTrue(info["obstacle_collision"])
+            self.assertTrue(info["collision"])
+            self.assertTrue(terminated)

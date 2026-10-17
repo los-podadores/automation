@@ -8,7 +8,7 @@
         <topic>/tractor/lidar/front</topic>
         <update_rate>20</update_rate>
         <always_on>true</always_on>
-        <visualize>false</visualize>
+        <visualize>true</visualize>
         <ray>
           <scan>
             <horizontal>
@@ -30,7 +30,7 @@
         <topic>/tractor/lidar/rear</topic>
         <update_rate>20</update_rate>
         <always_on>true</always_on>
-        <visualize>false</visualize>
+        <visualize>true</visualize>
         <ray>
           <scan>
             <horizontal>
@@ -52,7 +52,7 @@
         <topic>/tractor/lidar/right</topic>
         <update_rate>20</update_rate>
         <always_on>true</always_on>
-        <visualize>false</visualize>
+        <visualize>true</visualize>
         <ray>
           <scan>
             <horizontal>
@@ -74,7 +74,7 @@
         <topic>/tractor/lidar/left</topic>
         <update_rate>20</update_rate>
         <always_on>true</always_on>
-        <visualize>false</visualize>
+        <visualize>true</visualize>
         <ray>
           <scan>
             <horizontal>
@@ -132,10 +132,10 @@
         </surface>
       </collision>
       <collision name="chassis_body_collision">
-        <pose>-0.05 0 0.55 0 0 0</pose>
+        <pose>0 0 0.55 0 0 0</pose>
         <geometry>
           <box>
-            <size>2.80 1.45 0.50</size>
+            <size>2.9 1.72 0.4</size>
           </box>
         </geometry>
         <surface>

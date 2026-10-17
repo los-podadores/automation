@@ -76,6 +76,21 @@ class TestTractorModelSDF(unittest.TestCase):
         self.assertIn("gz::sim::systems::DiffDrive", plugin_names)
         self.assertIn("gz::sim::systems::JointStatePublisher", plugin_names)
 
+    def test_chassis_collision_dimensions(self) -> None:
+        chassis = self.model.find("link[@name='chassis']")
+        coll = chassis.find("collision[@name='chassis_body_collision']")
+        self.assertIsNotNone(coll)
+        size_str = coll.find("geometry/box/size").text
+        sizes = [float(v) for v in size_str.split()]
+        self.assertAlmostEqual(sizes[0], 2.90, places=2)
+        self.assertAlmostEqual(sizes[1], 1.72, places=2)
+        self.assertAlmostEqual(sizes[2], 0.40, places=2)
+
+        contact_sensor = chassis.find("sensor[@name='tractor_contact_sensor']")
+        self.assertIsNotNone(contact_sensor)
+        monitored_collisions = {c.text for c in contact_sensor.findall("contact/collision")}
+        self.assertIn("chassis_body_collision", monitored_collisions)
+
 
 if __name__ == "__main__":
     unittest.main()

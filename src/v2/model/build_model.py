@@ -171,7 +171,7 @@ def add_gpu_lidar(
     element(sensor, "topic", topic)
     element(sensor, "update_rate", update_rate)
     element(sensor, "always_on", "true")
-    element(sensor, "visualize", "false")
+    element(sensor, "visualize", "true")
     ray = element(sensor, "ray")
     scan = element(ray, "scan")
     horizontal = element(scan, "horizontal")
@@ -266,6 +266,24 @@ def create_model(g: dict, p: dict) -> ET.Element:
         (0, 0, g["beam_z_m"], 0, 0, 0),
         yellow,
     )
+
+    # Chassis Body Collision Boundary
+    chassis_coll = element(chassis, "collision", name="chassis_body_collision")
+    element(chassis_coll, "pose", (0.0, 0, 0.55, 0, 0, 0))
+    box(chassis_coll, (2.90, 1.72, 0.40))
+    surf = element(chassis_coll, "surface")
+    ode_fr = element(element(surf, "friction"), "ode")
+    element(ode_fr, "mu", 1.0)
+    element(ode_fr, "mu2", 1.0)
+
+    # Tractor Physics Contact Sensor for Ground-Truth Collision Detection
+    contact_sensor = element(chassis, "sensor", name="tractor_contact_sensor", type="contact")
+    element(contact_sensor, "always_on", "true")
+    element(contact_sensor, "update_rate", 30)
+    element(contact_sensor, "topic", "/model/tractor/contacts")
+    contact_el = element(contact_sensor, "contact")
+    element(contact_el, "collision", "connecting_beam_collision")
+    element(contact_el, "collision", "chassis_body_collision")
 
     # Axles, Steering Knuckles, and Wheels
     for end in ("rear", "front"):
