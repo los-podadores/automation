@@ -207,6 +207,10 @@ def main() -> int:
         ]
         if args.route:
             controller.extend(["--time-scale", str(args.time_scale)])
+        if args.camera:
+            # Camera sessions use the Windows visor as their sole control panel.
+            # Do not depend on a second WSLg Tk window appearing on the desktop.
+            controller.extend(["--control-dir", str(args.frames_dir)])
         if (args.demo or args.route) and args.headless:
             controller.append("--headless")
         elif args.obstacles and not args.demo:

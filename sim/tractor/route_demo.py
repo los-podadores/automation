@@ -7,6 +7,7 @@ import json
 import math
 import signal
 import time
+from pathlib import Path
 
 from build_model import ROOT, load_parameters
 from control import approach
@@ -278,6 +279,11 @@ def main():
         description="Recorrido de 110 m, curva, puerta y regreso"
     )
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument(
+        "--control-dir",
+        type=Path,
+        help="Controles en el visor Windows; sin panel Tk de Linux",
+    )
     parser.add_argument("--time-scale", type=float, default=1)
     parser.add_argument(
         "--timeout",
@@ -292,6 +298,40 @@ def main():
         parser.error("--timeout debe ser finito y positivo")
     demo = RouteDemo()
     try:
+        if args.control_dir is not None:
+            from session_control import RouteOperator
+
+            operator = RouteOperator(args.control_dir)
+            from gz.msgs10.cameratrack_pb2 import CameraTrack
+
+            camera_publisher = demo.commands.node.advertise("/gui/track", CameraTrack)
+            stopping = False
+
+            def stop_session(*_):
+                nonlocal stopping
+                stopping = True
+
+            signal.signal(signal.SIGTERM, stop_session)
+            while not stopping and not (args.control_dir / "stop.request").exists():
+                was_enabled = demo.enabled
+                connected = operator.poll(demo)
+                if demo.enabled and not was_enabled:
+                    message = CameraTrack()
+                    message.track_mode = CameraTrack.FOLLOW
+                    message.follow_target.name = "tractor"
+                    message.follow_offset.x = -8
+                    message.follow_offset.y = -6
+                    message.follow_offset.z = 5
+                    message.follow_pgain = message.track_pgain = 0.04
+                    camera_publisher.publish(message)
+                decision, vehicle = demo.tick()
+                if not connected and not demo.finished and not demo.failure:
+                    decision = Decision(
+                        False, "SIN CONTROL", "Pulsa Iniciar en el visor de cámara"
+                    )
+                operator.publish(demo, decision, vehicle)
+                time.sleep(1 / demo.parameters["publish_hz"])
+            return 0
         if args.headless:
             demo.enabled = True
             deadline = time.monotonic() + args.timeout

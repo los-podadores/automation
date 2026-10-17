@@ -279,8 +279,11 @@ También existe el acceso directo:
 .\sim\tractor\start_vision.ps1
 ```
 
-Se abren Gazebo, el panel del recorrido y el visor **CÁMARA + YOLO · SOLO
-OBSERVACIÓN**. Pulsa **Iniciar recorrido / Reanudar** en el panel del tractor.
+Se abren Gazebo y el visor **CÁMARA + YOLO · RECORRIDO**. Los botones
+**INICIAR RECORRIDO / REANUDAR** y **DETENER — ESPACIO** están en el propio visor,
+encima de la imagen. El controlador funciona en segundo plano, sin depender de
+una segunda ventana Tk de Ubuntu. El botón de inicio se habilita cuando el visor
+recibe el estado del controlador; no inicia automáticamente la marcha.
 El visor muestra las imágenes que ve la cámara frontal y las cajas de detección,
 clase y confianza de YOLO. Si hay una detección con profundidad válida, añade
 la mediana de profundidad de la región central del recuadro (`prof. ROI`). Ese
@@ -288,8 +291,11 @@ valor puede incluir fondo y todavía no se valida como distancia de seguridad.
 No se inventa una distancia cuando la profundidad falta o es inválida.
 
 Cada ejecución crea una sesión separada en `runs/tractor_camera/<sesión>/`.
-Cerrar el visor solicita cerrar solo la simulación iniciada por esa sesión.
-El panel del tractor conserva su botón de parada y sigue controlando el recorrido.
+Cerrar el visor solicita detener y cerrar solo la simulación iniciada por esa sesión.
+El visor muestra el estado del recorrido, el avance y la velocidad medida. Espacio
+detiene aunque tenga el foco el botón de inicio. Si se pierde la comunicación con
+los controles durante más de dos segundos, el controlador ordena parar; hace falta
+volver a pulsar Iniciar para reanudar. El heartbeat no es un freno real de hardware.
 Si la política de PowerShell bloquea el `.ps1`, usa el comando directo de Python;
 no necesitas cambiar la política de Windows.
 

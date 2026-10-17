@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 from camera_io import detection_depth, read_frame
+from session_control import OperatorClient
 
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT.parents[1]
@@ -260,7 +261,11 @@ def show_window(monitor, simulation):
     panel = ttk.Frame(root, padding=14)
     panel.grid()
     ttk.Label(
-        panel, text="CÁMARA + YOLO · SOLO OBSERVACIÓN", font=("Sans", 14, "bold")
+        panel,
+        text="CÁMARA + YOLO · RECORRIDO"
+        if monitor.args.source is None
+        else "CÁMARA + YOLO · SOLO OBSERVACIÓN",
+        font=("Sans", 14, "bold"),
     ).grid(pady=6)
     ttk.Label(
         panel, text="La conducción y la parada siguen usando la geometría de Gazebo."
@@ -268,6 +273,35 @@ def show_window(monitor, simulation):
     ttk.Label(
         panel, text="No detectar algo no significa que el camino esté libre."
     ).grid(pady=4)
+    operator = (
+        OperatorClient(monitor.args.frames_dir) if monitor.args.source is None else None
+    )
+    route_status = tk.StringVar(value="Conectando los controles del recorrido…")
+    start_button = None
+    if operator is not None:
+        ttk.Label(
+            panel, textvariable=route_status, font=("Sans", 11, "bold"), wraplength=620
+        ).grid(pady=6)
+        actions = ttk.Frame(panel)
+        actions.grid(sticky="ew", pady=4)
+        actions.columnconfigure((0, 1), weight=1)
+
+        def send_control(action):
+            try:
+                operator.send(action)
+            except OSError as error:
+                route_status.set(f"No se pudo enviar la orden: {error}")
+
+        start_button = ttk.Button(
+            actions,
+            text="INICIAR RECORRIDO / REANUDAR",
+            command=lambda: send_control("start"),
+            state="disabled",
+        )
+        start_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        ttk.Button(
+            actions, text="DETENER — ESPACIO", command=lambda: send_control("stop")
+        ).grid(row=0, column=1, sticky="ew")
     status = tk.StringVar(value="Esperando imágenes de la cámara…")
     ttk.Label(panel, textvariable=status, font=("Sans", 11, "bold")).grid(pady=6)
     picture = ttk.Label(panel)
@@ -286,9 +320,36 @@ def show_window(monitor, simulation):
     worker = threading.Thread(target=monitor.run, daemon=True)
     worker.start()
     last_sequence = None
+    last_heartbeat = 0.0
 
     def tick():
-        nonlocal last_sequence
+        nonlocal last_sequence, last_heartbeat
+        if operator is not None:
+            try:
+                if time.monotonic() - last_heartbeat > 0.3:
+                    operator.heartbeat()
+                    last_heartbeat = time.monotonic()
+                route = operator.status()
+                if route is None:
+                    route_status.set(
+                        "Esperando conexión con el controlador del recorrido…"
+                    )
+                    start_button.configure(state="disabled")
+                else:
+                    speed = route.get("speed_mps")
+                    route_status.set(
+                        f"{route['state']} · {route['reason']}\n{route['progress_m']:.1f} / {route['length_m']:.1f} m · Velocidad: {speed:.2f} m/s"
+                        if speed is not None
+                        else f"{route['state']} · {route['reason']}"
+                    )
+                    start_button.configure(
+                        state="disabled"
+                        if route["finished"] or route["failure"]
+                        else "normal"
+                    )
+            except OSError as error:
+                route_status.set(f"Sin conexión con los controles: {error}")
+                start_button.configure(state="disabled")
         if simulation is not None and simulation.poll() is not None:
             status.set(
                 "Gazebo terminó. Cierra este visor; revisa gazebo.log si hubo un error."
@@ -321,10 +382,32 @@ def show_window(monitor, simulation):
         root.after(60, tick)
 
     root.protocol("WM_DELETE_WINDOW", root.quit)
+    if operator is not None:
+
+        def emergency_stop(_event):
+            send_control("stop")
+            return "break"
+
+        root.bind_class("VisionEmergencyStop", "<KeyPress-space>", emergency_stop)
+        root.bind_class(
+            "VisionEmergencyStop", "<KeyRelease-space>", lambda _event: "break"
+        )
+
+        def install_stop_binding(widget):
+            widget.bindtags(("VisionEmergencyStop", *widget.bindtags()))
+            for child in widget.winfo_children():
+                install_stop_binding(child)
+
+        install_stop_binding(root)
     root.after(100, tick)
     try:
         root.mainloop()
     finally:
+        if operator is not None:
+            try:
+                operator.send("stop")
+            except OSError:
+                pass  # The expiring operator lease also stops the controller.
         monitor.stop_event.set()
         worker.join(timeout=10)
         root.destroy()
