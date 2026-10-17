@@ -52,6 +52,8 @@ class VisionMonitor:
             if args.source is None
             else PROJECT / "runs/tractor_vision/video"
         )
+        if args.output_dir is not None:
+            self.output = args.output_dir
         self.output.mkdir(parents=True, exist_ok=True)
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
@@ -62,6 +64,7 @@ class VisionMonitor:
         self.counts = {"person": 0, "dog": 0}
         self.finished = False
         self.capture = None
+        self.still_frame = None
 
     def run(self):
         source = self.args.source
@@ -71,15 +74,36 @@ class VisionMonitor:
         )
         last_saved = 0.0
         try:
-            if source is not None:
+            is_photo = source is not None and Path(source).suffix.lower() in (
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".bmp",
+                ".webp",
+                ".tif",
+                ".tiff",
+            )
+            if is_photo:
+                self.still_frame = cv2.imread(source)
+                if self.still_frame is None:
+                    raise RuntimeError(f"No se pudo leer la fotografía: {source}")
+            elif source is not None:
                 self.capture = cv2.VideoCapture(
                     int(source) if source.isdecimal() else source
                 )
                 if not self.capture.isOpened():
                     raise RuntimeError(f"No se pudo abrir el video/cámara: {source}")
+                if self.args.start_seconds and not self.capture.set(
+                    cv2.CAP_PROP_POS_MSEC, self.args.start_seconds * 1000
+                ):
+                    raise RuntimeError(
+                        "No se pudo avanzar al segundo indicado del video"
+                    )
             while not self.stop_event.is_set() and time.monotonic() < deadline:
                 depth = None
-                if self.capture is not None:
+                if self.still_frame is not None:
+                    bgr, stamp, sequence = self.still_frame, 0.0, 0
+                elif self.capture is not None:
                     success, bgr = self.capture.read()
                     if not success:
                         break
@@ -141,7 +165,9 @@ class VisionMonitor:
                 self.processed += 1
                 result = dict(
                     mode="monitor_only",
-                    control_source="Gazebo geometry; YOLO does not drive",
+                    control_source="Gazebo geometry; YOLO does not drive"
+                    if source is None
+                    else "None; real media inference only",
                     source="Gazebo rendered RGB-D" if source is None else source,
                     frame_sequence=sequence,
                     frame_time_s=stamp,
@@ -164,6 +190,8 @@ class VisionMonitor:
                     self.latest = annotated, result
                     self.updated = time.monotonic()
                 if self.args.max_frames and self.processed >= self.args.max_frames:
+                    break
+                if self.still_frame is not None:
                     break
                 self.stop_event.wait(0.05)
         except Exception as error:
@@ -268,7 +296,11 @@ def show_window(monitor, simulation):
         font=("Sans", 14, "bold"),
     ).grid(pady=6)
     ttk.Label(
-        panel, text="La conducción y la parada siguen usando la geometría de Gazebo."
+        panel,
+        text="La conducción y la parada siguen usando la geometría de Gazebo."
+        if monitor.args.source is None
+        else f"Fuente real: {Path(monitor.args.source).name if not monitor.args.source.isdecimal() else 'cámara ' + monitor.args.source}",
+        wraplength=750,
     ).grid()
     ttk.Label(
         panel,
@@ -311,6 +343,8 @@ def show_window(monitor, simulation):
     picture.grid()
     details = tk.StringVar(
         value="Person / Dog · Profundidad de ROI solo en Gazebo RGB-D"
+        if monitor.args.source is None
+        else "Person / Dog · Video o foto real, sin medición de distancia"
     )
     ttk.Label(panel, textvariable=details).grid(pady=6)
     ttk.Button(
@@ -440,20 +474,63 @@ def main():
     parser.add_argument(
         "--source", help="Video real o índice de webcam (0); no inicia Gazebo"
     )
+    parser.add_argument(
+        "--select-source",
+        action="store_true",
+        help="Elegir una fotografía o un video real en una ventana",
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument(
+        "--start-seconds",
+        type=float,
+        default=0,
+        help="Empieza el video en este segundo",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, help="Carpeta para los resultados de esta prueba"
+    )
+    parser.add_argument(
         "--timeout", type=float, default=0, help="Segundos reales; 0 sin límite"
     )
     args = parser.parse_args()
+    if args.select_source:
+        if args.launch or args.source is not None:
+            parser.error("--select-source se usa sin --launch ni --source")
+        import tkinter as tk
+        from tkinter import filedialog
+
+        picker = tk.Tk()
+        picker.withdraw()
+        try:
+            selected = filedialog.askopenfilename(
+                parent=picker,
+                title="Selecciona una foto o un video para YOLO",
+                filetypes=[
+                    (
+                        "Fotos y videos",
+                        "*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff *.mp4 *.avi *.mov *.mkv",
+                    ),
+                    ("Todos los archivos", "*.*"),
+                ],
+            )
+        finally:
+            picker.destroy()
+        if not selected:
+            return 0
+        args.source = selected
     if (
         not 0 < args.confidence <= 1
         or args.stride < 1
         or args.max_frames < 0
         or args.timeout < 0
+        or not np.isfinite(args.start_seconds)
+        or args.start_seconds < 0
     ):
         parser.error("Confianza, stride, máximo de fotogramas o timeout inválidos")
+    if args.start_seconds and (args.source is None or args.source.isdecimal()):
+        parser.error("--start-seconds requiere un archivo de video en --source")
     if args.launch and args.source is not None:
         parser.error("Usa --launch para Gazebo o --source para video/cámara real")
     simulation = None

@@ -336,6 +336,31 @@ Solo el visor YOLO, desde PowerShell:
 .\.venv\Scripts\python.exe sim/tractor/vision.py --source 0
 ```
 
+Para elegir una **foto o un video real** mediante una ventana:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py --select-source
+```
+
+Selecciona el archivo. Aparecerán las cajas Person/Dog y la confianza del modelo;
+las fotos permanecen visibles después de procesarse. Se admiten JPG, PNG, BMP,
+WEBP y TIFF, además de los formatos de video que pueda abrir OpenCV. Este modo
+no inicia una simulación ni envía órdenes al tractor.
+
+Prueba preparada con el video del recorrido, desde el segundo 80, donde aparecen
+personas:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py --source C:/Users/luisg/Videos/PODADORAS.mp4 --start-seconds 80
+```
+
+Se verificaron dos detecciones Person con confianza aproximada de 0,90 en ese
+fotograma y una detección Dog con confianza de 0,86 en una foto de prueba ROD.
+Son resultados de esos ejemplos, no una medición de precisión global. Las capturas
+anotadas están en `runs/tractor_vision/real_video_check/last_frame.jpg` y
+`runs/tractor_vision/real_dog_check/last_frame.jpg` en este equipo.
+Para conservar resultados de distintas pruebas, usa `--output-dir <carpeta>`.
+
 `0` es el índice de una cámara conectada a Windows. Un video o webcam RGB no
 aportan profundidad; se muestran detecciones sin distancia. Puedes ajustar
 `--confidence 0.45` o indicar otro archivo local con `--weights`.
