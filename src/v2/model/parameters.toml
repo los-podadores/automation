@@ -1,0 +1,16 @@
+# Physical simulation parameters extracted from project CAD and requirements
+[physics]
+chassis_mass_kg = 300.0
+rear_wheel_mass_kg = 35.0
+front_wheel_mass_kg = 20.0
+knuckle_mass_kg = 2.0
+friction = 2.0
+friction_lateral = 2.0
+
+[control]
+forward_speed_mps = 1.2
+reverse_speed_mps = 0.6
+max_steering_rad = 0.4
+steering_rate_radps = 0.6
+acceleration_mps2 = 0.6
+publish_hz = 30.0

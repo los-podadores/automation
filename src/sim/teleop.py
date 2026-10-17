@@ -18,9 +18,6 @@ import time
 from pathlib import Path
 from typing import Final
 
-# Sanitize sys.path to prevent foreign python version site-packages (e.g. Nix ROS python3.14 leaking into Python 3.12)
-_curr_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
-sys.path = [p for p in sys.path if "/lib/python" not in p or f"/lib/{_curr_ver}" in p]
 
 # Ensure project root in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -81,42 +78,6 @@ OBS_STATIC_COLOR: Final[tuple[int, int, int]] = (235, 75, 75)
 PIXELS_PER_METER: Final[float] = 14.0  # 1 meter = 14 pixels
 
 
-class GazeboBridge:
-    """Streams real-time velocity and steering commands to Gazebo Harmonic /cmd_vel topic."""
-
-    def __init__(self) -> None:
-        gz_bin = shutil.which("gz")
-        if gz_bin is None:
-            raise RuntimeError("Gazebo binary 'gz' not found in PATH.")
-        self.gz_bin: str = gz_bin
-        self.cmd_linear_x: float = 0.0
-        self.cmd_angular_z: float = 0.0
-        self.running: bool = True
-        self.connected: bool = True
-        self.thread = threading.Thread(target=self._publish_loop, daemon=True)
-        self.thread.start()
-
-    def update_command(self, vx: float, steer_rad: float) -> None:
-        self.cmd_linear_x = vx
-        self.cmd_angular_z = steer_rad
-
-    def _publish_loop(self) -> None:
-        gz_env = dict(os.environ)
-        gz_env["GZ_IP"] = "127.0.0.1"
-        while self.running:
-            if self.connected:
-                msg = f"linear: {{x: {self.cmd_linear_x:.3f}}}, angular: {{z: {self.cmd_angular_z:.3f}}}"
-                cmd = [self.gz_bin, "topic", "-t", "/cmd_vel", "-m", "gz.msgs.Twist", "-p", msg]
-                try:
-                    subprocess.run(cmd, env=gz_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.15)
-                except Exception:
-                    pass
-            time.sleep(0.05)
-
-    def stop(self) -> None:
-        self.running = False
-
-
 class CarTeleopApp:
     """Interactive GUI application for controlling the autonomous car in 3D simulation."""
 
@@ -126,14 +87,14 @@ class CarTeleopApp:
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.clock = pygame.time.Clock()
         self.backend = backend
-        self.gazebo_bridge: GazeboBridge | None = GazeboBridge() if self.backend == "gazebo" else None
 
         self.font_title = pygame.font.SysFont("monospace", 17, bold=True)
         self.font_body = pygame.font.SysFont("monospace", 13)
         self.font_small = pygame.font.SysFont("monospace", 11)
 
-        self.env = CarGazeboEnv(num_obstacles=4, track_length=95.0, road_width=7.0)
-        self.obs, self.info = self.env.reset(seed=42)
+        sim_mode = "gazebo" if self.backend == "gazebo" else "mock"
+        self.env = CarGazeboEnv(sim_mode=sim_mode, num_obstacles=4, track_length=95.0, road_width=7.0)
+        self.obs, self.info = self.env.reset()
 
         self.steer_action: float = 0.0
         self.throttle_action: float = 0.0
@@ -141,7 +102,7 @@ class CarTeleopApp:
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
         if self.backend == "gazebo":
-            self.status_msg = "Connected to Gazebo 3D. Driving /cmd_vel."
+            self.status_msg = "Connected to Gazebo 3D via ROS 2 Bridge."
         else:
             self.status_msg = "Initialized. Drive with WASD / Arrows."
         self.status_timer: int = 75
@@ -197,7 +158,12 @@ class CarTeleopApp:
         elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             target_steer = -1.0  # Turn Right (-steer)
 
-        self.steer_action += (target_steer - self.steer_action) * 0.28
+        if target_steer == 0.0:
+            self.steer_action += (0.0 - self.steer_action) * 0.40
+            if abs(self.steer_action) < 0.02:
+                self.steer_action = 0.0
+        else:
+            self.steer_action += (target_steer - self.steer_action) * 0.35
 
         # Throttle/Brake/Reverse: Up/Down
         target_throttle = 0.0
@@ -209,7 +175,11 @@ class CarTeleopApp:
             target_throttle = -1.0
             self.steer_action = 0.0
 
-        self.throttle_action += (target_throttle - self.throttle_action) * 0.35
+        if target_throttle == 0.0:
+            # Immediate zero throttle when no drive key is pressed
+            self.throttle_action = 0.0
+        else:
+            self.throttle_action += (target_throttle - self.throttle_action) * 0.40
         return True
 
     def draw_world(self) -> None:
@@ -409,8 +379,8 @@ class CarTeleopApp:
         self.screen.blit(title, (x, y))
         y += 24
 
-        if self.backend == "gazebo" and self.gazebo_bridge and self.gazebo_bridge.connected:
-            backend_lbl = self.font_small.render("BACKEND: GAZEBO 3D (ACTIVE STREAM) | ACKERMANN", True, TEXT_GREEN)
+        if self.backend == "gazebo":
+            backend_lbl = self.font_small.render("BACKEND: GAZEBO 3D (ROS 2 BRIDGE) | ACKERMANN", True, TEXT_GREEN)
         else:
             backend_lbl = self.font_small.render(f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN", True, TEXT_MUTED)
         self.screen.blit(backend_lbl, (x, y))
@@ -549,13 +519,15 @@ class CarTeleopApp:
                 self.obs, reward, terminated, truncated, self.info = self.env.step(action)
                 self.total_reward += reward
 
-                if self.gazebo_bridge:
-                    self.gazebo_bridge.update_command(self.env.car_vx, self.env.car_steer)
-
                 if terminated or truncated:
-                    self.obs, self.info = self.env.reset()
-                    self.total_reward = 0.0
-                    self.trail.clear()
+                    if self.backend == "sim":
+                        self.obs, self.info = self.env.reset()
+                        self.total_reward = 0.0
+                        self.trail.clear()
+                    else:
+                        # In live Gazebo backend, reset step count / reward without restarting Gazebo physics
+                        self.env.step_count = 0
+                        self.total_reward = 0.0
 
             self.draw_world()
             self.draw_hud()
@@ -563,9 +535,7 @@ class CarTeleopApp:
             pygame.display.flip()
             self.clock.tick(FPS)
 
-        if self.gazebo_bridge:
-            self.gazebo_bridge.stop()
-
+        self.env.close()
         pygame.quit()
 
 

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Agnostic ROS 2 CLI entrypoint.
+# Forwards CLI commands to ROS 2 Jazzy inside the gazebo-harmonic distrobox container.
+set -e
+
+CONTAINER_NAME="gazebo-harmonic"
+
+# Ensure container is running if docker is available
+if command -v docker >/dev/null 2>&1; then
+    STATUS="$(docker inspect --type container --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [ "$STATUS" != "running" ]; then
+        docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+fi
+
+# Execute /opt/ros/jazzy/bin/ros2 inside distrobox with clean environment and sourced workspace
+exec distrobox enter "$CONTAINER_NAME" -- bash -c '
+    for var in $(compgen -v | grep -E "^(NIX_|CMAKE_|LD_|PYTHON)"); do
+        unset "$var"
+    done
+    export PATH=/opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export GZ_IP=127.0.0.1
+    source /opt/ros/jazzy/setup.bash
+    exec ros2 "$@"
+' -- "$@"

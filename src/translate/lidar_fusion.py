@@ -16,19 +16,19 @@ from .fusion_types import Detection, PodExtrinsics, TrackedObstacle
 if TYPE_CHECKING:
     from .detect import ObstacleDetector
 
-# Default pod extrinsics configuration for 4-pod surround array (Large-Scale Utility Car)
-# Pod 0: Front-Center (0 deg heading offset, x=+1.90m, y=0.0m)
-# Pod 1: Rear-Center (180 deg heading offset, x=-1.90m, y=0.0m)
-# Pod 2: Front-Right Side (-90 deg heading offset, x=+1.00m, y=-0.95m)
-# Pod 3: Front-Left Side (+90 deg heading offset, x=+1.00m, y=+0.95m)
+# Default pod extrinsics configuration for 4-pod surround array (CAD Ground Truth)
+# Pod 0: Front-Center (0 deg heading offset, x=+1.05m, y=0.0m, z=0.65m)
+# Pod 1: Rear-Center (180 deg heading offset, x=-1.05m, y=0.0m, z=0.65m)
+# Pod 2: Front-Right Side (-90 deg heading offset, x=+0.50m, y=-0.70m, z=0.70m)
+# Pod 3: Front-Left Side (+90 deg heading offset, x=+0.50m, y=+0.70m, z=0.70m)
 DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
     PodExtrinsics(
         pod_id=0,
         name="front_center",
         yaw_deg=0.0,
-        x_offset=1.90,
+        x_offset=1.05,
         y_offset=0.0,
-        z_offset=1.05,
+        z_offset=0.65,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -41,9 +41,9 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
         pod_id=1,
         name="rear_center",
         yaw_deg=180.0,
-        x_offset=-1.90,
+        x_offset=-1.05,
         y_offset=0.0,
-        z_offset=1.05,
+        z_offset=0.65,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -56,9 +56,9 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
         pod_id=2,
         name="front_right",
         yaw_deg=-90.0,
-        x_offset=1.00,
-        y_offset=-0.95,
-        z_offset=1.10,
+        x_offset=0.50,
+        y_offset=-0.70,
+        z_offset=0.70,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -71,9 +71,9 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
         pod_id=3,
         name="front_left",
         yaw_deg=90.0,
-        x_offset=1.00,
-        y_offset=0.95,
-        z_offset=1.10,
+        x_offset=0.50,
+        y_offset=0.70,
+        z_offset=0.70,
         fx=600.0,
         fy=600.0,
         cx=320.0,

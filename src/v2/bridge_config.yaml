@@ -1,0 +1,56 @@
+# ros_gz_bridge configuration for Los Podadores Tractor
+# Bridges 4-pod LiDAR array, Actuator controls, and Odometry between Gazebo Harmonic and ROS 2 Jazzy
+
+- ros_topic_name: "/tractor/lidar/front"
+  gz_topic_name: "/tractor/lidar/front"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/tractor/lidar/rear"
+  gz_topic_name: "/tractor/lidar/rear"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/tractor/lidar/right"
+  gz_topic_name: "/tractor/lidar/right"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/tractor/lidar/left"
+  gz_topic_name: "/tractor/lidar/left"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/model/tractor/steering_angle"
+  gz_topic_name: "/model/tractor/steering_angle"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: "ROS_TO_GZ"
+
+- ros_topic_name: "/model/tractor/rear_axle/cmd_vel"
+  gz_topic_name: "/model/tractor/rear_axle/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: "ROS_TO_GZ"
+
+- ros_topic_name: "/cmd_vel"
+  gz_topic_name: "/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: "ROS_TO_GZ"
+
+- ros_topic_name: "/model/tractor/wheel_odometry"
+  gz_topic_name: "/model/tractor/wheel_odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/model/tractor/odometry"
+  gz_topic_name: "/model/tractor/odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: "GZ_TO_ROS"

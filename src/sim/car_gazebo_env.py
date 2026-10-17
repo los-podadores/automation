@@ -8,10 +8,12 @@ Ackermann control [steering, throttle/brake].
 from __future__ import annotations
 
 import math
+from pathlib import Path
+import time
 from typing import Any, Final
 
-import gymnasium as gym
 import numpy as np
+import gymnasium as gym
 
 from src.translate.config import (
     COLLISION_RADIUS,
@@ -25,7 +27,7 @@ from src.translate.config import (
 )
 from src.translate.fusion_types import GoalState
 from .mock_perception import MockPerceptionEngine
-from .spatial_map import EgoKinematics, SpatialMapBuilder
+from .spatial_map import EgoKinematics, LaserScanData, SpatialMapBuilder
 from .track_generator import ProceduralTrack, ProceduralTrackGenerator
 
 # Mission phase constants
@@ -46,6 +48,7 @@ class CarGazeboEnv(gym.Env):
         track_length: float = 95.0,
         road_width: float = 7.0,
         random_seed: int | None = None,
+        track_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.sim_mode = sim_mode
@@ -53,6 +56,7 @@ class CarGazeboEnv(gym.Env):
         self.track_length = track_length
         self.road_width = road_width
         self.rng = np.random.default_rng(random_seed)
+        self.track_path = track_path if track_path is not None else Path("src/v2/model/procedural_track.json")
 
         # 156 floats: 6 kinematics + 6 GoalState + 72 ray distances + 72 ray classes
         self.observation_space = gym.spaces.Box(
@@ -78,6 +82,14 @@ class CarGazeboEnv(gym.Env):
         self.mission_phase: int = PHASE_A_TO_B
         self.hold_steps: int = 0
         self.hold_duration_steps: int = 40  # 2 seconds at 20 Hz for remote teleop hold
+
+        # Live ROS 2 / Gazebo Bridge
+        self.ros_bridge: Any | None = None
+        self._current_scans: dict[str, LaserScanData] = {}
+        if self.sim_mode == "gazebo":
+            from .ros_bridge import Ros2GazeboBridge
+
+            self.ros_bridge = Ros2GazeboBridge()
 
         # Vehicle internal state
         self.car_x: float = 0.0
@@ -221,14 +233,19 @@ class CarGazeboEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
-        # Generate a new random procedural track
-        track_seed = int(self.rng.integers(0, 1_000_000))
-        self.track = self.track_gen.generate_track(
-            seed=track_seed,
-            length=self.track_length,
-            road_width=self.road_width,
-            num_obstacles=self.num_obstacles,
-        )
+        # Synchronize track geometry
+        if self.sim_mode == "gazebo" and self.track_path.exists():
+            self.track = ProceduralTrack.load_json(self.track_path)
+        elif options and "track" in options and isinstance(options["track"], ProceduralTrack):
+            self.track = options["track"]
+        else:
+            track_seed = int(self.rng.integers(0, 1_000_000))
+            self.track = self.track_gen.generate_track(
+                seed=track_seed,
+                length=self.track_length,
+                road_width=self.road_width,
+                num_obstacles=self.num_obstacles,
+            )
 
         self.step_count = 0
         self.mission_phase = PHASE_A_TO_B
@@ -246,6 +263,30 @@ class CarGazeboEnv(gym.Env):
         self.car_yaw_rate = 0.0
         self.last_steer_action = 0.0
         self.last_throttle_action = 0.0
+
+        if self.sim_mode == "gazebo":
+            if self.ros_bridge is None:
+                raise RuntimeError("sim_mode is 'gazebo' but ros_bridge is not initialized.")
+            # Wait up to 1.0s for background executor to receive initial state from Gazebo
+            t_start = time.monotonic()
+            while time.monotonic() - t_start < 1.0:
+                odom, scans = self.ros_bridge.get_state()
+                if odom is not None:
+                    if self.ros_bridge.has_world_odom:
+                        self.car_x = odom["x"]
+                        self.car_y = odom["y"]
+                        self.car_yaw = odom["yaw"]
+                    else:
+                        self.car_yaw = syaw + odom["yaw"]
+                        self.car_x = sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+                        self.car_y = sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                    self.car_vx = odom["vx"]
+                    self.car_yaw_rate = odom["yaw_rate"]
+                if scans:
+                    self._current_scans = scans
+                if odom is not None and len(scans) == 4:
+                    break
+                time.sleep(0.02)
 
         goal_state = self._compute_goal_state()
         self.prev_dist_to_goal = goal_state.distance
@@ -269,7 +310,16 @@ class CarGazeboEnv(gym.Env):
         )
         goal_state = self._compute_goal_state()
 
-        # Filter entities through mock perception
+        if self.sim_mode == "gazebo":
+            if self.ros_bridge is None:
+                raise RuntimeError("sim_mode is 'gazebo' but ros_bridge is not initialized.")
+            return self.map_builder.build_observation(
+                kinematics=kinematics,
+                goal_state=goal_state,
+                pod_scans=self._current_scans,
+            )
+
+        # Mock perception fallback for pure mock simulation
         tracked_obstacles = self.mock_perception.filter_and_noise(
             self.car_x, self.car_y, self.car_yaw, self.track.obstacles if self.track else []
         )
@@ -289,37 +339,68 @@ class CarGazeboEnv(gym.Env):
         steer_cmd = float(np.clip(action[0], -1.0, 1.0))
         throttle_cmd = float(np.clip(action[1], -1.0, 1.0))
 
-        # 1. Steering Dynamics (Ackermann angle with actuator lag)
-        target_steer = steer_cmd * MAX_STEER_RAD
-        self.car_steer += (target_steer - self.car_steer) * 0.35
-
-        # 2. Longitudinal Dynamics (Separate forward acceleration and reverse/braking)
-        if throttle_cmd >= 0.0:
-            target_accel = throttle_cmd * MAX_ACCEL_MPSS
-            self.car_ax = target_accel
-            self.car_vx = min(MAX_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+        if self.sim_mode == "gazebo" and self.ros_bridge is not None:
+            target_steer = steer_cmd * MAX_STEER_RAD
+            if throttle_cmd >= 0.0:
+                if self.car_vx < -0.1:
+                    # Vehicle is reversing; forward throttle acts as active brake to stop
+                    target_speed = 0.0
+                else:
+                    target_speed = throttle_cmd * MAX_SPEED_MPS
+            else:
+                if self.car_vx > 0.1:
+                    # Vehicle is moving forward; reverse throttle acts as active brake to stop
+                    target_speed = 0.0
+                else:
+                    # Vehicle is stationary or reversing; engage reverse drive
+                    target_speed = throttle_cmd * abs(MIN_SPEED_MPS)
+            self.ros_bridge.publish_action(target_steer, target_speed)
+            odom, scans = self.ros_bridge.get_state()
+            if odom is not None:
+                if self.ros_bridge.has_world_odom:
+                    self.car_x = odom["x"]
+                    self.car_y = odom["y"]
+                    self.car_yaw = odom["yaw"]
+                else:
+                    sx, sy, syaw = self.track.start_pose if self.track else (0.0, 0.0, 0.0)
+                    self.car_yaw = syaw + odom["yaw"]
+                    self.car_x = sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+                    self.car_y = sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                self.car_vx = odom["vx"]
+                self.car_yaw_rate = odom["yaw_rate"]
+                self.car_steer = target_steer
+            if scans:
+                self._current_scans = scans
         else:
-            # Negative action commands deceleration / reverse
-            target_decel = abs(throttle_cmd) * MAX_BRAKE_MPSS
-            self.car_ax = -target_decel
-            self.car_vx = max(MIN_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+            # 1. Steering Dynamics (Ackermann angle with actuator lag)
+            target_steer = steer_cmd * MAX_STEER_RAD
+            self.car_steer += (target_steer - self.car_steer) * 0.35
 
-        # 3. Non-Holonomic Bicycle / Ackermann Kinematics
-        # Essential constraint: heading rate is STRICTLY proportional to velocity
-        # If linear speed is zero, yaw rate is zero (cannot spin in place)
-        if abs(self.car_vx) > 1e-4:
-            self.car_yaw_rate = (self.car_vx / WHEELBASE) * math.tan(self.car_steer)
-        else:
-            self.car_yaw_rate = 0.0
+            # 2. Longitudinal Dynamics (Separate forward acceleration and reverse/braking)
+            if throttle_cmd >= 0.0:
+                target_accel = throttle_cmd * MAX_ACCEL_MPSS
+                self.car_ax = target_accel
+                self.car_vx = min(MAX_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+            else:
+                # Negative action commands deceleration / reverse
+                target_decel = abs(throttle_cmd) * MAX_BRAKE_MPSS
+                self.car_ax = -target_decel
+                self.car_vx = max(MIN_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
 
-        self.car_yaw += self.car_yaw_rate * DT_SECONDS
-        self.car_x += self.car_vx * math.cos(self.car_yaw) * DT_SECONDS
-        self.car_y += self.car_vx * math.sin(self.car_yaw) * DT_SECONDS
+            # 3. Non-Holonomic Bicycle / Ackermann Kinematics
+            if abs(self.car_vx) > 1e-4:
+                self.car_yaw_rate = (self.car_vx / WHEELBASE) * math.tan(self.car_steer)
+            else:
+                self.car_yaw_rate = 0.0
 
-        # 4. Update Dynamic Obstacles
-        if self.track:
-            for obs in self.track.obstacles:
-                obs.world_x += obs.world_vx * DT_SECONDS
+            self.car_yaw += self.car_yaw_rate * DT_SECONDS
+            self.car_x += self.car_vx * math.cos(self.car_yaw) * DT_SECONDS
+            self.car_y += self.car_vx * math.sin(self.car_yaw) * DT_SECONDS
+
+            # 4. Update Dynamic Obstacles
+            if self.track:
+                for obs in self.track.obstacles:
+                    obs.world_x += obs.world_vx * DT_SECONDS
                 obs.world_y += obs.world_vy * DT_SECONDS
 
         # 5. Collision Checks
@@ -394,4 +475,7 @@ class CarGazeboEnv(gym.Env):
         return obs, float(reward), terminated, truncated, info
 
     def close(self) -> None:
-        pass
+        if self.ros_bridge is not None:
+            self.ros_bridge.close()
+            self.ros_bridge = None
+

@@ -3,6 +3,7 @@
 # Forwards CLI commands to Gazebo Harmonic inside the container with sanitized environment.
 set -e
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTAINER_NAME="gazebo-harmonic"
 
 # Ensure container is started if container runtime is present
@@ -13,5 +14,16 @@ if command -v docker >/dev/null 2>&1; then
     fi
 fi
 
+RES_PATH="${GZ_SIM_RESOURCE_PATH:-$DIR/src/v2/model}"
+
 # Execute /usr/bin/gz inside distrobox container with X11/XWayland GLX compatibility
-exec env -u LD_LIBRARY_PATH distrobox enter "$CONTAINER_NAME" -- bash -c 'export QT_QPA_PLATFORM=xcb; exec /usr/bin/gz "$@"' -- "$@"
+exec distrobox enter "$CONTAINER_NAME" -- bash -c '
+    for var in $(compgen -v | grep -E "^(NIX_|CMAKE_|LD_|PYTHON)"); do
+        unset "$var"
+    done
+    export QT_QPA_PLATFORM=xcb
+    export GZ_IP=127.0.0.1
+    export GZ_SIM_RESOURCE_PATH="'"$RES_PATH"'"
+    export SDF_PATH="'"$RES_PATH"'"
+    exec /usr/bin/gz "$@"
+' -- "$@"

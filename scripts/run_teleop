@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Runs the teleoperation HUD inside the container with native ROS 2 Jazzy and Pygame
+set -e
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONTAINER_NAME="gazebo-harmonic"
+
+# Forward execution to distrobox with clean environment and display forwarding
+exec distrobox enter "$CONTAINER_NAME" -- bash -c '
+    for var in $(compgen -v | grep -E "^(NIX_|CMAKE_|LD_|PYTHON)"); do
+        unset "$var"
+    done
+    export PATH=/opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export GZ_IP=127.0.0.1
+    source /opt/ros/jazzy/setup.bash
+    export PYTHONPATH="'"$DIR"':${PYTHONPATH:-}"
+    export DISPLAY="'"${DISPLAY:-:0}"'"
+    export WAYLAND_DISPLAY="'"${WAYLAND_DISPLAY:-}"'"
+    export XDG_RUNTIME_DIR="'"${XDG_RUNTIME_DIR:-}"'"
+    exec /usr/bin/python3 "'"$DIR"'"/src/sim/teleop.py "$@"
+' -- "$@"

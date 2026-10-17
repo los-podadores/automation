@@ -54,6 +54,13 @@ def main() -> None:
         default=None,
         help="Number of distributed environment runners",
     )
+    parser.add_argument(
+        "--sim-mode",
+        type=str,
+        default="mock",
+        choices=["mock", "gazebo"],
+        help="Simulation mode: 'mock' (analytical CPU) or 'gazebo' (live ROS 2 Gazebo simulation)",
+    )
     args = parser.parse_args()
 
     os.environ["TMPDIR"] = HEAD_TMPDIR
@@ -81,7 +88,25 @@ def main() -> None:
         num_runners = args.runners if args.runners is not None else max(1, len(active_nodes) - 1)
     else:
         print("[train] Running locally (single-node mode)...")
-        ray.init(ignore_reinit_error=True)
+        os.environ.pop("RAY_ADDRESS", None)
+        ray.init(
+            address="local",
+            runtime_env={
+                "working_dir": str(BASE_DIR),
+                "env_vars": {"PYTHONPATH": str(BASE_DIR)},
+                "excludes": [
+                    "best_model.zip",
+                    "yolov8s.pt",
+                    "models/**",
+                    "datasets/**",
+                    "*.zip",
+                    "*.pt",
+                    ".venv/**",
+                    "src/v2/.venv/**",
+                ],
+            },
+            ignore_reinit_error=True,
+        )
         num_runners = args.runners if args.runners is not None else 2
 
     register_env(ENV_NAME, env_creator)
@@ -91,7 +116,7 @@ def main() -> None:
         PPOConfig()
         .environment(
             ENV_NAME,
-            env_config={"sim_mode": "mock", "num_obstacles": 6},
+            env_config={"sim_mode": args.sim_mode, "num_obstacles": 6},
         )
         .framework("torch")
         .training(

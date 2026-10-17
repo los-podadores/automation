@@ -35,6 +35,71 @@ class ProceduralTrack:
     obstacles: list[SimulatedEntity]  # Static and dynamic obstacles
     road_width: float
 
+    def export_json(self, output_path: Path) -> None:
+        """Export track structure to JSON for synchronization with Gymnasium / Teleop."""
+        import json
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "seed": self.seed,
+            "start_pose": list(self.start_pose),
+            "goal_pose": list(self.goal_pose),
+            "waypoints_forward": self.waypoints_forward.tolist(),
+            "waypoints_reverse": self.waypoints_reverse.tolist(),
+            "wall_segments": [
+                [[p1[0], p1[1]], [p2[0], p2[1]]] for p1, p2 in self.wall_segments
+            ],
+            "obstacles": [
+                {
+                    "name": obs.name,
+                    "class_id": obs.class_id,
+                    "class_name": obs.class_name,
+                    "world_x": obs.world_x,
+                    "world_y": obs.world_y,
+                    "world_vx": obs.world_vx,
+                    "world_vy": obs.world_vy,
+                    "radius": obs.radius,
+                }
+                for obs in self.obstacles
+            ],
+            "road_width": self.road_width,
+        }
+        output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    @classmethod
+    def load_json(cls, input_path: Path) -> ProceduralTrack:
+        """Load track structure from synchronized JSON."""
+        import json
+
+        data = json.loads(input_path.read_text(encoding="utf-8"))
+        obstacles = [
+            SimulatedEntity(
+                name=obs["name"],
+                class_id=obs["class_id"],
+                class_name=obs["class_name"],
+                world_x=obs["world_x"],
+                world_y=obs["world_y"],
+                world_vx=obs["world_vx"],
+                world_vy=obs["world_vy"],
+                radius=obs["radius"],
+            )
+            for obs in data["obstacles"]
+        ]
+        wall_segments = [
+            ((seg[0][0], seg[0][1]), (seg[1][0], seg[1][1]))
+            for seg in data["wall_segments"]
+        ]
+        return cls(
+            seed=data["seed"],
+            start_pose=(data["start_pose"][0], data["start_pose"][1], data["start_pose"][2]),
+            goal_pose=(data["goal_pose"][0], data["goal_pose"][1], data["goal_pose"][2]),
+            waypoints_forward=np.array(data["waypoints_forward"], dtype=np.float32),
+            waypoints_reverse=np.array(data["waypoints_reverse"], dtype=np.float32),
+            wall_segments=wall_segments,
+            obstacles=obstacles,
+            road_width=float(data["road_width"]),
+        )
+
     def export_gazebo_sdf(self, output_path: Path) -> None:
         """Export the procedural track as a valid Gazebo Harmonic SDF world."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,6 +189,14 @@ class ProceduralTrack:
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
+    <!-- Essential Gazebo Harmonic Simulation Plugins -->
+    <plugin name="gz::sim::systems::Physics" filename="gz-sim-physics-system"/>
+    <plugin name="gz::sim::systems::UserCommands" filename="gz-sim-user-commands-system"/>
+    <plugin name="gz::sim::systems::SceneBroadcaster" filename="gz-sim-scene-broadcaster-system"/>
+    <plugin name="gz::sim::systems::Sensors" filename="gz-sim-sensors-system">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
     <!-- Sun / Lighting -->
     <light type="directional" name="sun">
       <cast_shadows>true</cast_shadows>
@@ -144,6 +217,14 @@ class ProceduralTrack:
               <size>250 250</size>
             </plane>
           </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>100.0</mu>
+                <mu2>100.0</mu2>
+              </ode>
+            </friction>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
@@ -198,8 +279,8 @@ class ProceduralTrack:
 
     <!-- Include Large-Scale Ackermann Car -->
     <include>
-      <uri>model://tractor.sdf</uri>
-      <pose>{ax:.3f} {ay:.3f} 0.40 0 0 {self.start_pose[2]:.4f}</pose>
+      <uri>model://tractor</uri>
+      <pose>{ax:.3f} {ay:.3f} 0.00 0 0 {self.start_pose[2]:.4f}</pose>
     </include>
   </world>
 </sdf>

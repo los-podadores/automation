@@ -22,6 +22,26 @@ RAY_FOV_RAD: Final[float] = LIDAR_FOV_RAD  # 360 degrees surround (-pi to +pi)
 ANGULAR_RESOLUTION: Final[float] = RAY_FOV_RAD / NUM_RAYS
 
 
+POD_CONFIGS: Final[dict[str, tuple[float, float, float]]] = {
+    "front": (1.05, 0.0, 0.0),
+    "rear": (-1.05, 0.0, math.pi),
+    "right": (0.50, -0.70, -math.pi / 2.0),
+    "left": (0.50, 0.70, math.pi / 2.0),
+}
+
+
+@dataclass(frozen=True)
+class LaserScanData:
+    """Normalized representation of a 2D planar LiDAR scan."""
+
+    ranges: np.ndarray
+    angle_min: float
+    angle_max: float
+    angle_increment: float
+    range_min: float = 0.15
+    range_max: float = 25.0
+
+
 @dataclass(frozen=True)
 class EgoKinematics:
     """Vehicle dynamic state in SI units."""
@@ -53,12 +73,68 @@ class SpatialMapBuilder:
         # Angles for each ray center covering full 360 degrees: [-pi, +pi)
         self.ray_angles = np.linspace(-math.pi, math.pi, self.num_rays, endpoint=False)
 
+    def fuse_pod_scans(
+        self,
+        pod_scans: dict[str, LaserScanData],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Fuse 4 distributed LaserScans into a 360-degree polar range and classification grid.
+
+        Args:
+            pod_scans: Mapping of pod name ('front', 'rear', 'right', 'left') to LaserScanData.
+
+        Returns:
+            distances: (72,) normalized float array in [0.0, 1.0].
+            classes: (72,) float array of spatial class codes.
+        """
+        distances = np.full(self.num_rays, self.max_range, dtype=np.float32)
+        classes = np.full(self.num_rays, CLASS_FREE, dtype=np.float32)
+
+        for pod_name, scan in pod_scans.items():
+            if pod_name not in POD_CONFIGS or len(scan.ranges) == 0:
+                continue
+
+            x_pod, y_pod, yaw_pod = POD_CONFIGS[pod_name]
+            raw_ranges = np.asarray(scan.ranges, dtype=np.float32)
+            n_samples = len(raw_ranges)
+
+            angles = scan.angle_min + np.arange(n_samples, dtype=np.float32) * scan.angle_increment
+            valid_mask = (
+                np.isfinite(raw_ranges)
+                & (raw_ranges >= scan.range_min)
+                & (raw_ranges <= scan.range_max)
+                & (raw_ranges <= self.max_range)
+            )
+
+            if not np.any(valid_mask):
+                continue
+
+            valid_r = raw_ranges[valid_mask]
+            valid_ang = angles[valid_mask] + yaw_pod
+
+            # Transform sensor-local ray hit into vehicle ego frame
+            x_ego = x_pod + valid_r * np.cos(valid_ang)
+            y_ego = y_pod + valid_r * np.sin(valid_ang)
+
+            d_ego = np.hypot(x_ego, y_ego)
+            phi_ego = np.arctan2(y_ego, x_ego)
+
+            # Map azimuth to [0, 71] uniform angular bin
+            bin_indices = np.floor((phi_ego + math.pi) / ANGULAR_RESOLUTION).astype(int) % self.num_rays
+
+            for b_idx, d in zip(bin_indices, d_ego):
+                if d < distances[b_idx]:
+                    distances[b_idx] = d
+                    classes[b_idx] = float(CLASS_STATIC_HAZARD)
+
+        norm_distances = np.clip(distances / self.max_range, 0.0, 1.0)
+        return norm_distances, classes
+
     def compute_ray_scan(
         self,
         obstacles: list[TrackedObstacle],
         wall_segments_ego: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Cast 72 radial rays across the full 360-degree surround perimeter.
+        """Cast 72 radial rays across the full 360-degree surround perimeter (analytical fallback).
 
         Args:
             obstacles: List of tracked obstacles in vehicle ego frame.
@@ -135,8 +211,9 @@ class SpatialMapBuilder:
         self,
         kinematics: EgoKinematics,
         goal_state: GoalState,
-        obstacles: list[TrackedObstacle],
+        obstacles: list[TrackedObstacle] | None = None,
         wall_segments_ego: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
+        pod_scans: dict[str, LaserScanData] | None = None,
     ) -> np.ndarray:
         """Assemble the complete 156-float observation vector for RLlib.
 
@@ -148,9 +225,17 @@ class SpatialMapBuilder:
         """
         k_arr = kinematics.to_array()
         g_arr = goal_state.to_array()
-        dist_arr, cls_arr = self.compute_ray_scan(obstacles, wall_segments_ego=wall_segments_ego)
+
+        if pod_scans is not None:
+            dist_arr, cls_arr = self.fuse_pod_scans(pod_scans)
+        else:
+            dist_arr, cls_arr = self.compute_ray_scan(
+                obstacles if obstacles is not None else [],
+                wall_segments_ego=wall_segments_ego,
+            )
 
         obs = np.concatenate([k_arr, g_arr, dist_arr, cls_arr]).astype(np.float32)
         assert len(obs) == 156, f"Observation size mismatch: expected 156, got {len(obs)}"
         return obs
+
 

@@ -75,20 +75,24 @@ TRAIN_DEVICE: Final[str] = "0"  # GPU index, or "cpu"
 TRAIN_WORKERS: Final[int] = 8
 TRAIN_PATIENCE: Final[int] = 20  # early stopping patience
 
-# --- Autonomous Vehicle Dimensions & Kinematics (Full-Scale Utility Car) ---
-CAR_LENGTH: Final[float] = 3.80  # Overall longitudinal length (meters)
-CAR_WIDTH: Final[float] = 1.90  # Overall lateral width (meters)
-CAR_HEIGHT: Final[float] = 1.40  # Overall height (meters)
-WHEELBASE: Final[float] = 2.50  # Distance between front and rear axles (meters)
-TRACK_WIDTH: Final[float] = 1.60  # Lateral distance between left and right wheels (meters)
-WHEEL_RADIUS: Final[float] = 0.38  # Wheel radius (meters)
-VEHICLE_MASS_KG: Final[float] = 950.0  # Vehicle mass (kg)
-COLLISION_RADIUS: Final[float] = 1.25  # Bounding collision radius (meters)
+# --- Autonomous Vehicle Dimensions & Kinematics (STEP CAD Ground Truth: TRACTOR.stp) ---
+WHEELBASE: Final[float] = 2.00  # Distance between front and rear axles (meters)
+REAR_TRACK_WIDTH: Final[float] = 1.40  # Lateral distance between rear wheels (meters)
+FRONT_TRACK_WIDTH: Final[float] = 1.29  # Lateral distance between front wheels (meters)
+TRACK_WIDTH: Final[float] = 1.40  # Dominant lateral track width (meters)
+REAR_WHEEL_RADIUS: Final[float] = 0.50  # Rear drive wheel radius (meters)
+FRONT_WHEEL_RADIUS: Final[float] = 0.37  # Front steering wheel radius (meters)
+WHEEL_RADIUS: Final[float] = 0.50  # Drive wheel radius for odometry (meters)
+CAR_LENGTH: Final[float] = 3.00  # Overall longitudinal footprint with wheels (meters)
+CAR_WIDTH: Final[float] = 1.67  # Overall lateral width with rear wheels (meters)
+CAR_HEIGHT: Final[float] = 1.25  # Overall height (meters)
+VEHICLE_MASS_KG: Final[float] = 414.0  # Total vehicle mass (kg): 300 chassis + 2x35 rear + 2x20 front + 2x2 knuckle
+COLLISION_RADIUS: Final[float] = 1.15  # Bounding collision radius (meters)
 
 # Non-holonomic Ackermann Dynamic Limits
-MAX_STEER_RAD: Final[float] = 0.5585  # ~32 degrees maximum front steering angle
-MAX_SPEED_MPS: Final[float] = 3.0  # 10.8 km/h max forward velocity
-MIN_SPEED_MPS: Final[float] = -1.2  # -4.3 km/h max reverse velocity
+MAX_STEER_RAD: Final[float] = 0.40  # ~23 degrees maximum front steering angle (joint limit)
+MAX_SPEED_MPS: Final[float] = 2.0  # 7.2 km/h max forward velocity
+MIN_SPEED_MPS: Final[float] = -1.0  # -3.6 km/h max reverse velocity
 MAX_ACCEL_MPSS: Final[float] = 1.5  # Max forward acceleration (m/s^2)
 MAX_BRAKE_MPSS: Final[float] = 2.5  # Max service braking deceleration (m/s^2)
 DT_SECONDS: Final[float] = 0.05  # 20 Hz simulation / control loop
