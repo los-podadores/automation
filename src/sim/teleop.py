@@ -85,11 +85,14 @@ class GazeboBridge:
     """Streams real-time velocity and steering commands to Gazebo Harmonic /cmd_vel topic."""
 
     def __init__(self) -> None:
-        self.gz_bin = shutil.which("gz") or "/nix/store/bl975ygdbwh7pn8y5sglx4xxj0z7n17d-ros-env/bin/gz"
+        gz_bin = shutil.which("gz")
+        if gz_bin is None:
+            raise RuntimeError("Gazebo binary 'gz' not found in PATH.")
+        self.gz_bin: str = gz_bin
         self.cmd_linear_x: float = 0.0
         self.cmd_angular_z: float = 0.0
         self.running: bool = True
-        self.connected: bool = Path(self.gz_bin).exists()
+        self.connected: bool = True
         self.thread = threading.Thread(target=self._publish_loop, daemon=True)
         self.thread.start()
 

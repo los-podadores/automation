@@ -114,6 +114,8 @@
               ninja
               bazel_8
 
+              distrobox
+
               colconPkg
               rosCoreEnvJazzy
             ])
@@ -125,7 +127,7 @@
           buildInputs = [ pkgs.bashInteractive ];
 
           shellHook = ''
-            export PATH="${pkgs.cmake}:${pkgs.ninja}:$PATH"
+            export PATH="$PWD/scripts:${pkgs.cmake}:${pkgs.ninja}:$PATH"
             # Prevent nix ros-env python3.14 packages from contaminating Python 3.12 virtualenvs
             unset PYTHONPATH
           '';

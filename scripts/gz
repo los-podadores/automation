@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Agnostic Gazebo CLI entrypoint.
+# Forwards CLI commands to Gazebo Harmonic inside the container with sanitized environment.
+set -e
+
+CONTAINER_NAME="gazebo-harmonic"
+
+# Ensure container is started if container runtime is present
+if command -v docker >/dev/null 2>&1; then
+    STATUS="$(docker inspect --type container --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [ "$STATUS" != "running" ]; then
+        docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+fi
+
+# Execute /usr/bin/gz inside distrobox container with X11/XWayland GLX compatibility
+exec env -u LD_LIBRARY_PATH distrobox enter "$CONTAINER_NAME" -- bash -c 'export QT_QPA_PLATFORM=xcb; exec /usr/bin/gz "$@"' -- "$@"
