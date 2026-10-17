@@ -44,7 +44,7 @@ PHASE_B_TO_A: Final[int] = 2
 class CarGazeboEnv(gym.Env):
     """Reinforcement learning environment for non-holonomic Ackermann autonomous vehicle."""
 
-    metadata = {"render_modes": ["human", "rgb_array"]}
+    metadata = {"render_modes": ["rgb_array"]}
 
     def __init__(
         self,
@@ -54,12 +54,15 @@ class CarGazeboEnv(gym.Env):
         road_width: float = 7.0,
         random_seed: int | None = None,
         track_path: Path | None = None,
+        render_mode: str | None = None,
     ) -> None:
         super().__init__()
         self.sim_mode = sim_mode
         self.num_obstacles = num_obstacles
         self.track_length = track_length
         self.road_width = road_width
+        self.render_mode = render_mode
+        self._renderer: Any | None = None
         self.rng = np.random.default_rng(random_seed)
         self.track_path = (
             track_path
@@ -341,6 +344,8 @@ class CarGazeboEnv(gym.Env):
         self.step_count = 0
         self.mission_phase = PHASE_A_TO_B
         self.hold_steps = 0
+        if self._renderer is not None:
+            self._renderer.reset_trail()
         if self.track is not None:
             self.max_episode_steps = self.track.max_episode_steps
 
@@ -643,6 +648,22 @@ class CarGazeboEnv(gym.Env):
                 self.map_builder.latest_mock_pod_scans, obstacles=tracked_obs
             )
         return []
+
+    def render(self) -> np.ndarray:
+        """Render high-fidelity top-down RGB frame of the environment."""
+        if self.render_mode is None:
+            raise ValueError(
+                "Cannot call render() when render_mode was not specified in __init__."
+            )
+        if self.render_mode == "rgb_array":
+            if self._renderer is None:
+                from .env_renderer import CarEnvRenderer
+
+                self._renderer = CarEnvRenderer()
+            return self._renderer.render_frame(self)
+        raise ValueError(
+            f"Unsupported render_mode: {self.render_mode!r}. Supported modes: ['rgb_array']"
+        )
 
     def close(self) -> None:
         if self.ros_bridge is not None:
