@@ -23,6 +23,6 @@ sudo install -m 0644 "$KEY_FILE" /usr/share/keyrings/pkgs-osrf-archive-keyring.g
 printf '%s\n' 'deb [arch=amd64 signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] https://packages.osrfoundation.org/gazebo/ubuntu-stable noble main' \
   | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
 sudo apt-get update
-sudo apt-get install -y gz-harmonic python3-gz-transport13 python3-gz-msgs10 python3-tk
+sudo apt-get install -y gz-harmonic python3-gz-transport13 python3-gz-msgs10 python3-tk python3-numpy
 /usr/bin/python3 -c 'from gz.transport13 import Node; from gz.msgs10.twist_pb2 import Twist; import tkinter; print("Dependencias del tractor instaladas")'
 gz sim --versions

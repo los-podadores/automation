@@ -124,6 +124,22 @@ def create_model(g: dict, p: dict) -> ET.Element:
     rubber = (0.065, 0.07, 0.08, 1)
     hub = (0.72, 0.74, 0.76, 1)
     chassis = element(model, "link", name="chassis")
+    # Gazebo-frame camera: +X forward, +Y left, +Z up. Optional Sensors
+    # system is enabled by the launcher; normal physics runs do not render it.
+    sensor = element(chassis, "sensor", name="front_rgbd", type="rgbd_camera")
+    element(sensor, "pose", (1.15, 0, 1.25, 0, 0.06, 0))
+    element(sensor, "topic", "/tractor/front_camera")
+    element(sensor, "update_rate", 10)
+    element(sensor, "always_on", "true")
+    camera = element(sensor, "camera")
+    element(camera, "horizontal_fov", 1.4)
+    image = element(camera, "image")
+    element(image, "width", 640)
+    element(image, "height", 360)
+    element(image, "format", "R8G8B8")
+    clip = element(camera, "clip")
+    element(clip, "near", 0.15)
+    element(clip, "far", 25)
     # Approximate lumped chassis inertia; actual mass distribution is unknown.
     length, width, height = g["wheelbase_m"] + 0.22, g["rear"]["axle_length_m"], 0.25
     mass = physics["chassis_mass_kg"]

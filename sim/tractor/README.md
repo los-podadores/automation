@@ -5,9 +5,10 @@ delantera Ackermann, tracción trasera, conducción por teclado y recorridos
 automáticos con obstáculos. Los escenarios son locales; no necesitan descargar
 modelos de Fuel.
 
-Esta etapa utiliza Gazebo Transport directamente. **ROS 2, YOLO y PPO no son
-necesarios todavía.** Más adelante se puede integrar ROS 2 Jazzy y `ros_gz` sobre
-esta misma combinación de Ubuntu 24.04 / Gazebo Harmonic.
+Esta etapa utiliza Gazebo Transport directamente. La conducción geométrica no
+requiere ROS 2, YOLO ni PPO. El visor opcional de cámara usa YOLO en Windows.
+Más adelante se puede integrar ROS 2 Jazzy y `ros_gz` sobre esta misma combinación
+de Ubuntu 24.04 / Gazebo Harmonic.
 
 ## 1. Instalación en Windows: Ubuntu 24.04 dentro de WSL 2
 
@@ -43,7 +44,8 @@ bash sim/tractor/setup_ubuntu.sh
 ```
 
 El instalador pedirá la contraseña de Linux mediante `sudo`. Instala:
-`gz-harmonic`, `python3-gz-transport13`, `python3-gz-msgs10` y `python3-tk`, desde
+`gz-harmonic`, `python3-gz-transport13`, `python3-gz-msgs10`, `python3-tk` y
+`python3-numpy`, desde
 los repositorios de Ubuntu y el repositorio oficial de Gazebo.
 No ejecuta el entrenamiento ni instala paquetes en el Python de Windows.
 
@@ -246,7 +248,130 @@ cada actor, mantiene el margen configurado y termina a menos de **0,2 m** del
 inicio con la orientación de regreso. Esto valida este escenario simulado; no
 valida los frenos, la detección visual o la seguridad del tractor físico.
 
-## 6. Qué se tomó del CAD y qué falta calibrar
+## 6. Cámara RGB-D y tu YOLO entrenado
+
+El tractor incorpora una cámara frontal RGB-D virtual a 1,25 m de altura:
+**640 × 360**, **10 Hz**, alcance de profundidad de **0,15 a 25 m**. Se activa con
+`--camera`; el modo normal no ejecuta el renderizado de sensores.
+
+La integración usa el modelo existente `models/translate/best.pt`, que en este
+proyecto contiene **Person (3)** y **Dog (10)**. El código resuelve los identificadores
+por los nombres del modelo para admitir también pesos COCO con otra numeración.
+No vuelve a entrenar, no descarga pesos y no modifica el modelo original.
+
+En este equipo, PyTorch, Ultralytics y la GPU ya están preparados en el entorno de
+**Windows**. Gazebo permanece en Ubuntu. Las imágenes se intercambian mediante
+archivos locales de último fotograma, con sustitución atómica, sin abrir puertos
+de red ni acumular una cola de imágenes.
+
+### Abrir todo desde PowerShell
+
+Cierra el panel y Gazebo anteriores. Si estás dentro de Ubuntu, `exit` vuelve a
+PowerShell. Desde la carpeta `automation`:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py --launch
+```
+
+También existe el acceso directo:
+
+```powershell
+.\sim\tractor\start_vision.ps1
+```
+
+Se abren Gazebo, el panel del recorrido y el visor **CÁMARA + YOLO · SOLO
+OBSERVACIÓN**. Pulsa **Iniciar recorrido / Reanudar** en el panel del tractor.
+El visor muestra las imágenes que ve la cámara frontal y las cajas de detección,
+clase y confianza de YOLO. Si hay una detección con profundidad válida, añade
+la mediana de profundidad de la región central del recuadro (`prof. ROI`). Ese
+valor puede incluir fondo y todavía no se valida como distancia de seguridad.
+No se inventa una distancia cuando la profundidad falta o es inválida.
+
+Cada ejecución crea una sesión separada en `runs/tractor_camera/<sesión>/`.
+Cerrar el visor solicita cerrar solo la simulación iniciada por esa sesión.
+El panel del tractor conserva su botón de parada y sigue controlando el recorrido.
+Si la política de PowerShell bloquea el `.ps1`, usa el comando directo de Python;
+no necesitas cambiar la política de Windows.
+
+### Qué controla realmente al tractor
+
+**YOLO observa; todavía no controla la marcha ni autoriza el paso.** La parada del
+recorrido continúa usando los actores y la puerta conocidos de Gazebo. El visor
+no se suscribe a esas etiquetas ni a sus posiciones: sus detecciones salen de
+las imágenes. Las salidas incluyen `mode: monitor_only` y no se conectan a los
+topics de dirección o tracción. Un fotograma sin detecciones no demuestra que
+el camino esté libre; el visor marca la imagen como desactualizada si deja de llegar.
+
+El modelo ya detectó personas en el video real `PODADORAS.mp4` y un perro en una
+imagen del conjunto de prueba ROD. **Los actores actuales del simulador son
+figuras geométricas** y no tienen la apariencia de esas imágenes reales. En una
+captura probada, el perro geométrico no fue detectado. La conexión cámara → YOLO
+funciona, pero todavía falta validar reconocimiento fiable dentro del simulador
+con actores realistas o entrenamiento adicional con imágenes simuladas.
+
+Antes de usar visión para frenar: validar personas/perros en distintos tamaños,
+poses y luces; comprobar distancias; añadir seguimiento temporal y cubrir los
+obstáculos que quedan fuera de la cámara frontal. La puerta y otros objetos no
+se vuelven detectables automáticamente por filtrar solo Person/Dog. La cámara
+RGB-D virtual es una elección para experimentar, no una compra de sensor ya decidida.
+
+### Probar tu video o una cámara USB
+
+Solo el visor YOLO, desde PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py --source C:/Users/luisg/Videos/PODADORAS.mp4
+.\.venv\Scripts\python.exe sim/tractor/vision.py --source 0
+```
+
+`0` es el índice de una cámara conectada a Windows. Un video o webcam RGB no
+aportan profundidad; se muestran detecciones sin distancia. Puedes ajustar
+`--confidence 0.45` o indicar otro archivo local con `--weights`.
+
+### Ejecución separada y comprobación
+
+Si prefieres dos terminales, en Ubuntu:
+
+```bash
+bash sim/tractor/run.sh --route --camera
+```
+
+En PowerShell, en `automation`:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py
+```
+
+En este modo el visor no cierra el Gazebo abierto aparte. Deben compartir la
+carpeta `runs/tractor_camera/live`. El modo `--launch` gestiona esto automáticamente
+con una carpeta y partición de transporte propias.
+
+Se guardan `frame.npz` (último par RGB-D), `detections.json`, `last_frame.jpg`,
+`summary.json`, `camera_status.json` al cerrar el puente y `gazebo.log` al usar
+`--launch`. Las detecciones guardadas son históricas: consulta su marca de tiempo,
+no las interpretes como una señal actual de vía libre. Los contadores de resumen
+cuentan detecciones por fotograma, no individuos únicos. El intercambio queda
+en `runs/`, excluido de Git.
+
+Para una prueba sin visor sobre una sesión que esté emitiendo imágenes:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py --frames-dir runs/tractor_camera/live --headless --max-frames 5 --timeout 30
+```
+
+No hace falta instalar ROS 2 ni una segunda copia de PyTorch en Ubuntu. El puente
+solo necesita NumPy y los bindings de Gazebo; `setup_ubuntu.sh` incluye
+`python3-numpy` para instalaciones nuevas. El renderizado de sensores necesita un
+backend gráfico disponible; en el equipo se probó con WSLg.
+
+Para comprobar toda la cadena y el cierre de la sesión desde un solo comando,
+sin ventanas:
+
+```powershell
+.\.venv\Scripts\python.exe sim/tractor/vision.py --launch --headless --max-frames 5 --timeout 40
+```
+
+## 7. Qué se tomó del CAD y qué falta calibrar
 
 `cad/TRACTOR.stp` es una copia del archivo original proporcionado. Se conservan
 su hash SHA-256 y las medidas extraídas en `cad_dimensions.json`.
@@ -277,7 +402,7 @@ con `yaw_rate = velocidad * tan(dirección) / distancia_entre_ejes`. Las ruedas
 delanteras ruedan libremente. Esto no convierte al vehículo en uno que gire
 sobre sí mismo ni supone que el tractor real tendrá dos motores de tracción.
 
-## 7. Regenerar y comprobar
+## 8. Regenerar y comprobar
 
 Para comprobar geometría, articulaciones, inercias y órdenes de movimiento sin
 tener Gazebo instalado:
@@ -335,5 +460,7 @@ bash sim/tractor/run.sh --headless
 - [Controlador Ackermann de Gazebo](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1AckermannSteering.html)
 - [Controlador del diferencial trasero](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1DiffDrive.html)
 - [Gazebo Transport en Python](https://gazebosim.org/api/transport/13/python.html)
+- [Sensores RGB-D de Gazebo](https://gazebosim.org/api/sensors/7/classgz_1_1sensors_1_1RgbdCameraSensor.html)
+- [Inferencia de Ultralytics YOLO](https://docs.ultralytics.com/modes/predict/)
 - [Configuración de seguimiento de cámara de Gazebo](https://github.com/gazebosim/gz-gui/blob/gz-gui8/src/plugins/camera_tracking/CameraTracking.cc)
 - [Aplicaciones gráficas en WSL](https://learn.microsoft.com/es-es/windows/wsl/tutorials/gui-apps)

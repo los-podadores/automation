@@ -10,9 +10,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from build_model import ROOT, create_route_world, main as build, write_xml
+from build_model import ROOT, main as build, plugin, write_xml
 
 
 def simulation_environment(
@@ -101,6 +102,14 @@ def main() -> int:
         "--route", action="store_true", help="110 m, curva, puerta y regreso"
     )
     parser.add_argument(
+        "--camera",
+        action="store_true",
+        help="Activa cámara RGB-D; YOLO se ejecuta aparte como observador",
+    )
+    parser.add_argument(
+        "--frames-dir", type=Path, default=ROOT.parents[1] / "runs/tractor_camera/live"
+    )
+    parser.add_argument(
         "--time-scale",
         type=float,
         default=1,
@@ -113,6 +122,8 @@ def main() -> int:
         parser.error("--time-scale requiere --route")
     if args.route and (args.demo or args.obstacles):
         parser.error("Usa --route solo; ya incluye persona y perro en ambos sentidos")
+    if args.camera and not args.route:
+        parser.error("--camera requiere --route")
     args.obstacles = args.obstacles or args.demo
     try:
         build()
@@ -136,14 +147,13 @@ def main() -> int:
         )
     )
     temporary_world = None
-    if args.route and args.time_scale != 1:
-        from geometry import extract_geometry
-        from route import load_route_config
-
-        geometry = extract_geometry(ROOT / "cad/TRACTOR.stp")
-        document = create_route_world(
-            geometry, load_route_config(geometry), args.time_scale
-        )
+    if args.route and (args.time_scale != 1 or args.camera):
+        document = ET.parse(world_path).getroot()
+        document.find("world/physics/real_time_factor").text = str(args.time_scale)
+        if args.camera:
+            plugin(
+                document.find("world"), "Sensors", "sensors", {"render_engine": "ogre2"}
+            )
         document.find("world/include/uri").text = str(ROOT / "models/tractor/model.sdf")
         temporary_world = tempfile.TemporaryDirectory(prefix="tractor-route-")
         world_path = Path(temporary_world.name) / "tractor_route.sdf"
@@ -162,7 +172,24 @@ def main() -> int:
         command, env=env, cwd=ROOT / "worlds", start_new_session=True
     )
     keyboard = None
+    camera_bridge = None
     try:
+        if args.camera:
+            args.frames_dir.mkdir(parents=True, exist_ok=True)
+            if (args.frames_dir / "stop.request").exists():
+                raise RuntimeError(
+                    "Esta sesión de cámara ya terminó; utiliza otra --frames-dir"
+                )
+            camera_bridge = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(ROOT / "camera_bridge.py"),
+                    "--frames-dir",
+                    str(args.frames_dir),
+                ],
+                env=env,
+                start_new_session=True,
+            )
         if args.headless and not (args.demo or args.route):
             return gazebo.wait()
         controller = [
@@ -186,6 +213,8 @@ def main() -> int:
             controller.append("--obstacles")
         keyboard = subprocess.Popen(controller, env=env, start_new_session=True)
         while gazebo.poll() is None and keyboard.poll() is None:
+            if camera_bridge is not None and camera_bridge.poll() is not None:
+                return camera_bridge.returncode
             try:
                 return_code = keyboard.wait(timeout=0.25)
                 return return_code
@@ -202,6 +231,8 @@ def main() -> int:
         # Close teleop first so it can send zero commands before Gazebo exits.
         if keyboard is not None:
             stop_process(keyboard)
+        if camera_bridge is not None:
+            stop_process(camera_bridge)
         stop_process(gazebo)
         if temporary_world is not None:
             temporary_world.cleanup()
