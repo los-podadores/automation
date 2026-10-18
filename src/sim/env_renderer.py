@@ -24,8 +24,13 @@ import pygame  # noqa: E402
 from src.translate.config import (  # noqa: E402
     CAR_LENGTH,
     CAR_WIDTH,
+    FRONT_TRACK_WIDTH,
+    FRONT_WHEEL_RADIUS,
     LIDAR_MAX_RANGE,
     LIDAR_NUM_RAYS,
+    REAR_TRACK_WIDTH,
+    REAR_WHEEL_RADIUS,
+    VEHICLE_SIZE_SCALE,
     WHEELBASE,
 )
 from src.translate.fusion_types import (  # noqa: E402
@@ -205,17 +210,17 @@ class CarEnvRenderer:
         pygame.draw.polygon(self.surface, CAR_BODY_COLOR, screen_corners)
         pygame.draw.polygon(self.surface, (255, 175, 75), screen_corners, 2)
 
-        # Wheels
-        wheel_l, wheel_w = 0.74, 0.26
+        # Wheels (scaled with vehicle: per-axle diameter x width)
         axle_f, axle_r = WHEELBASE / 2.0, -WHEELBASE / 2.0
-        track_h = 0.80
+        track_f = FRONT_TRACK_WIDTH / 2.0
+        track_r = REAR_TRACK_WIDTH / 2.0
         wheel_configs = [
-            (axle_f, +track_h, env.car_steer),
-            (axle_f, -track_h, env.car_steer),
-            (axle_r, +track_h, 0.0),
-            (axle_r, -track_h, 0.0),
+            (axle_f, +track_f, env.car_steer, 2.0 * FRONT_WHEEL_RADIUS, 0.16 * VEHICLE_SIZE_SCALE),
+            (axle_f, -track_f, env.car_steer, 2.0 * FRONT_WHEEL_RADIUS, 0.16 * VEHICLE_SIZE_SCALE),
+            (axle_r, +track_r, 0.0, 2.0 * REAR_WHEEL_RADIUS, 0.27 * VEHICLE_SIZE_SCALE),
+            (axle_r, -track_r, 0.0, 2.0 * REAR_WHEEL_RADIUS, 0.27 * VEHICLE_SIZE_SCALE),
         ]
-        for wx_ego, wy_ego, w_steer in wheel_configs:
+        for wx_ego, wy_ego, w_steer, wheel_l, wheel_w in wheel_configs:
             total_steer = car_yaw + w_steer
             cos_w = math.cos(total_steer)
             sin_w = math.sin(total_steer)

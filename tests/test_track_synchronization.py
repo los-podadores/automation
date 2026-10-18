@@ -11,6 +11,7 @@ import numpy as np
 
 from src.sim.car_gazebo_env import CarGazeboEnv
 from src.sim.track_generator import ProceduralTrackGenerator
+from src.translate.config import CAR_LENGTH, CAR_WIDTH, COLLISION_RADIUS
 
 
 class TestTrackSynchronization(unittest.TestCase):
@@ -96,6 +97,41 @@ class TestTrackSynchronization(unittest.TestCase):
             self.assertIn("<parent>world</parent>", content)
             self.assertIn("<damping>35.0</damping>", content)
 
+    def test_dynamic_obstacle_axis_aligns_with_waypoints(self) -> None:
+        """Verify prismatic guide axes run along the waypoint travel direction."""
+        import math
+        import re
+
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sdf_path = Path(tmpdir) / "test_track.sdf"
+            track.export_gazebo_sdf(sdf_path)
+            content = sdf_path.read_text(encoding="utf-8")
+
+        blocks = re.findall(
+            r"<!-- Dynamic Obstacle \d+: .*? -->.*?"
+            r"<pose>(.*?)</pose>.*?"
+            r"<xyz>(.*?)</xyz>.*?"
+            r"<waypoint>(.*?)</waypoint>\s*<waypoint>(.*?)</waypoint>",
+            content,
+            re.S,
+        )
+        self.assertGreater(len(blocks), 0)
+        for pose_txt, axis_txt, wp1_txt, wp2_txt in blocks:
+            model_yaw = float(pose_txt.split()[5])
+            ax, ay, _ = (float(v) for v in axis_txt.split())
+            x1, y1 = (float(v) for v in wp1_txt.split())
+            x2, y2 = (float(v) for v in wp2_txt.split())
+            dx, dy = (x2 - x1), (y2 - y1)
+            dist = math.hypot(dx, dy)
+            self.assertGreater(dist, 1.0)
+            # Guide axis is expressed in the yaw-rotated model frame: rotating
+            # it forward by the model yaw must recover the world direction.
+            cos_y, sin_y = math.cos(model_yaw), math.sin(model_yaw)
+            wx = ax * cos_y - ay * sin_y
+            wy = ax * sin_y + ay * cos_y
+            self.assertAlmostEqual(wx * (dx / dist) + wy * (dy / dist), 1.0, places=2)
+
     def test_tractor_sdf_contact_sensor_and_chassis_collision(self) -> None:
         """Verify tractor model SDF has chassis_body_collision and tractor_contact_sensor."""
         tractor_sdf_path = Path("src/v2/model/tractor/model.sdf")
@@ -124,17 +160,21 @@ class TestTrackSynchronization(unittest.TestCase):
             env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
             env.reset(options={"track": track})
 
-            # Position car near a wall where center is >1.15m away but front bumper hits
-            # Road width is 7.0m, wall is at y = 3.5m. Center at y = 2.2m (dist=1.3m > 1.15m)
-            # With car_yaw = 60 degrees, front reaches y = 2.2 + 1.45 * sin(60 deg) + 0.86 * cos(60 deg) = 3.89m > 3.5m
+            # Position car near a wall where center is beyond COLLISION_RADIUS but front bumper hits.
+            # Road width is 7.0m, wall is at y = 3.5m. Front reach at 60 deg yaw:
+            # car_y + (CAR_LENGTH/2) * sin(60) + (CAR_WIDTH/2) * cos(60).
+            front_reach = (CAR_LENGTH / 2.0) * math.sin(math.radians(60.0)) + (
+                CAR_WIDTH / 2.0
+            ) * math.cos(math.radians(60.0))
             env.car_x = 10.0
-            env.car_y = 2.2
+            env.car_y = 3.5 - front_reach + 0.1
             env.car_yaw = math.radians(60.0)
 
+            self.assertGreater(3.5 - env.car_y, COLLISION_RADIUS)
             self.assertTrue(env._check_wall_collision())
 
     def test_parallel_wall_collision_at_physical_envelope(self) -> None:
-        """Verify tractor side collision triggers exactly at physical contact (car half-width 0.86m + wall half-thickness 0.15m = 1.01m)."""
+        """Verify tractor side collision triggers exactly at physical contact."""
         track = self.gen.generate_estadio_ho_chi_min(seed=42)
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "track.json"
@@ -142,10 +182,11 @@ class TestTrackSynchronization(unittest.TestCase):
             env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
             env.reset(options={"track": track})
 
-            # Road width is 7.0m, straight segment has left wall at y = +3.5m
-            # Physical wall surface is at 3.50 - 0.15 = 3.35m.
-            # Tractor right outer tire/envelope is at car_y + 0.86m.
-            # Contact occurs when car_y = 3.35 - 0.86 = 2.49m (centerline distance = 1.01m).
+            # Road width is 7.0m, straight segment has left wall at y = +3.5m.
+            # Physical wall surface is at 3.50 - 0.15 = 3.35m; contact when the
+            # car envelope (CAR_WIDTH/2) reaches it plus the 0.02m margin.
+            half_car = CAR_WIDTH / 2.0
+            contact_y = 3.35 - half_car
             env.car_x = 10.0
             env.car_yaw = 0.0
 
@@ -153,12 +194,12 @@ class TestTrackSynchronization(unittest.TestCase):
             env.car_y = 0.0
             self.assertFalse(env._check_wall_collision())
 
-            # Touching the wall surface (car_y = 2.50m -> envelope outer edge at 3.36m, distance to wall = 0.14m <= 0.17m r_eff)
-            env.car_y = 2.50
+            # Touching the wall surface (envelope edge within r_eff of the wall box)
+            env.car_y = contact_y + 0.01
             self.assertTrue(env._check_wall_collision())
 
-            # Grinding into the wall (car_y = 2.60m)
-            env.car_y = 2.60
+            # Grinding into the wall
+            env.car_y = contact_y + 0.11
             self.assertTrue(env._check_wall_collision())
 
     def test_obstacle_collision_at_physical_envelope(self) -> None:
@@ -175,10 +216,10 @@ class TestTrackSynchronization(unittest.TestCase):
             env.car_y = 0.0
             env.car_yaw = 0.0
 
-            # Front bumper is at x = 10.0 + 1.45 = 11.45m
-            # Put obstacle of radius 0.50m touching front bumper: center at x = 11.45 + 0.50 = 11.95m
+            # Front bumper is at x = 10.0 + CAR_LENGTH/2; obstacle of radius
+            # 0.50m touches it (minus the 0.02m contact margin).
             obs = track.obstacles[0]
-            obs.world_x = 11.94
+            obs.world_x = 10.0 + CAR_LENGTH / 2.0 + 0.50 - 0.01
             obs.world_y = 0.0
             obs.radius = 0.50
 

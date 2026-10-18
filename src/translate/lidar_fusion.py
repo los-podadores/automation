@@ -12,21 +12,20 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 
 from .config import (
+    CAR_WIDTH,
     FRONT_LIDAR_X,
     FRONT_LIDAR_Z,
     REAR_LIDAR_X,
     REAR_LIDAR_Z,
+    VEHICLE_SIZE_SCALE,
+    WHEELBASE,
 )
 from .fusion_types import Detection, PodExtrinsics, TrackedObstacle
 
-if TYPE_CHECKING:
-    from .detect import ObstacleDetector
+_SIDE_POD_X: Final[float] = WHEELBASE / 4.0
+_SIDE_POD_Y: Final[float] = CAR_WIDTH / 2.0 + 0.10 * VEHICLE_SIZE_SCALE
+_SIDE_POD_Z: Final[float] = 0.70 * VEHICLE_SIZE_SCALE
 
-# Default pod extrinsics configuration for surround array (CAD Ground Truth)
-# Pod 0: Front-Center (0 deg heading offset, front bumper)
-# Pod 1: Rear-Center (180 deg heading offset, rear hitch)
-# Pod 2: Front-Right Side (-90 deg heading offset, x=+0.50m, y=-0.70m, z=0.70m)
-# Pod 3: Front-Left Side (+90 deg heading offset, x=+0.50m, y=+0.70m, z=0.70m)
 DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
     PodExtrinsics(
         pod_id=0,
@@ -62,9 +61,9 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
         pod_id=2,
         name="front_right",
         yaw_deg=-90.0,
-        x_offset=0.50,
-        y_offset=-0.70,
-        z_offset=0.70,
+        x_offset=_SIDE_POD_X,
+        y_offset=-_SIDE_POD_Y,
+        z_offset=_SIDE_POD_Z,
         fx=600.0,
         fy=600.0,
         cx=320.0,
@@ -77,9 +76,9 @@ DEFAULT_PODS: Final[tuple[PodExtrinsics, ...]] = (
         pod_id=3,
         name="front_left",
         yaw_deg=90.0,
-        x_offset=0.50,
-        y_offset=0.70,
-        z_offset=0.70,
+        x_offset=_SIDE_POD_X,
+        y_offset=_SIDE_POD_Y,
+        z_offset=_SIDE_POD_Z,
         fx=600.0,
         fy=600.0,
         cx=320.0,

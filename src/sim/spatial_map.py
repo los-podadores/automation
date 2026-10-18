@@ -9,11 +9,14 @@ from typing import Any, Final
 import numpy as np
 
 from src.translate.config import (
+    CAR_WIDTH,
     FRONT_LIDAR_X,
     LIDAR_FOV_RAD,
     LIDAR_MAX_RANGE,
     LIDAR_NUM_RAYS,
     REAR_LIDAR_X,
+    VEHICLE_SIZE_SCALE,
+    WHEELBASE,
 )
 from src.translate.fusion_types import (
     CLASS_FREE,
@@ -28,11 +31,15 @@ RAY_FOV_RAD: Final[float] = LIDAR_FOV_RAD  # 360 degrees surround (-pi to +pi)
 ANGULAR_RESOLUTION: Final[float] = RAY_FOV_RAD / NUM_RAYS
 
 
+# Side pods sit just outside the scaled body: x ahead of center, y clear of half-width.
+SIDE_POD_X: Final[float] = WHEELBASE / 4.0
+SIDE_POD_Y: Final[float] = CAR_WIDTH / 2.0 + 0.10 * VEHICLE_SIZE_SCALE
+
 POD_CONFIGS: Final[dict[str, tuple[float, float, float]]] = {
     "front": (FRONT_LIDAR_X, 0.0, 0.0),
     "rear": (REAR_LIDAR_X, 0.0, math.pi),
-    "right": (0.50, -0.70, -math.pi / 2.0),
-    "left": (0.50, 0.70, math.pi / 2.0),
+    "right": (SIDE_POD_X, -SIDE_POD_Y, -math.pi / 2.0),
+    "left": (SIDE_POD_X, SIDE_POD_Y, math.pi / 2.0),
 }
 
 POD_SPECS: Final[dict[str, dict[str, float | int]]] = {
@@ -53,16 +60,16 @@ POD_SPECS: Final[dict[str, dict[str, float | int]]] = {
         "angle_max": 1.047198,
     },
     "right": {
-        "x": 0.50,
-        "y": -0.70,
+        "x": SIDE_POD_X,
+        "y": -SIDE_POD_Y,
         "yaw": -math.pi / 2.0,
         "samples": 150,
         "angle_min": -0.872665,
         "angle_max": 0.872665,
     },
     "left": {
-        "x": 0.50,
-        "y": 0.70,
+        "x": SIDE_POD_X,
+        "y": SIDE_POD_Y,
         "yaw": math.pi / 2.0,
         "samples": 150,
         "angle_min": -0.872665,

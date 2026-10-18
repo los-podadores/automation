@@ -11,6 +11,7 @@ import numpy as np
 
 from src.sim.mock_perception import SimulatedEntity
 from src.sim.track_generator import (
+    ESTADIO_SITE,
     MIN_TURN_RADIUS,
     ProceduralTrackGenerator,
 )
@@ -21,7 +22,7 @@ class TestModularTrackGenerator(unittest.TestCase):
         self.gen = ProceduralTrackGenerator(default_road_width=7.0)
 
     def test_estadio_ho_chi_min_geometry(self) -> None:
-        """Verify site scenario generates 100m road + left turn + 60x40m lot + apron."""
+        """Verify site scenario generates 100m road + left turn + 60x40m yard."""
         track = self.gen.generate_estadio_ho_chi_min(seed=42)
 
         self.assertEqual(track.preset_name, "estadio_ho_chi_min")
@@ -38,12 +39,31 @@ class TestModularTrackGenerator(unittest.TestCase):
         self.assertEqual(track.waypoints_forward.shape[1], 3)
         self.assertEqual(track.waypoints_reverse.shape, track.waypoints_forward.shape)
 
-        # 1:1 site scale: ~184.6m nominal (100 + 12.57 + 60 + 12)
-        self.assertGreater(track.nominal_length, 170.0)
-        self.assertLess(track.nominal_length, 200.0)
+        # 1:1 site scale: ~164.6m nominal (100 + 12.57 + 52)
+        self.assertGreater(track.nominal_length, 150.0)
+        self.assertLess(track.nominal_length, 180.0)
 
         # Fair optimized max episode steps (roundtrip buffer)
         self.assertGreater(track.max_episode_steps, 8000)
+
+        # Per-waypoint corridor widths: road third narrow, yard third wide
+        k = len(track.waypoints_forward)
+        self.assertEqual(track.corridor_half_widths.shape, (k,))
+        road_hw = float(np.median(track.corridor_half_widths[: k // 4]))
+        yard_hw = float(np.median(track.corridor_half_widths[int(k * 0.7) :]))
+        self.assertAlmostEqual(road_hw, ESTADIO_SITE["road_width"] / 2.0, delta=0.2)
+        self.assertAlmostEqual(yard_hw, ESTADIO_SITE["yard_width"] / 2.0, delta=1.0)
+
+        # Yard is a full rectangle: goal sits goal_margin inside the far wall,
+        # centered laterally, with no 7m throat near the old plaza/courtyard joint.
+        gx, gy, _ = (float(v) for v in track.goal_pose)
+        dists_to_walls = [
+            min(math.hypot(gx - x1, gy - y1), math.hypot(gx - x2, gy - y2))
+            for (x1, y1), (x2, y2) in track.wall_segments
+        ]
+        self.assertAlmostEqual(
+            min(dists_to_walls), ESTADIO_SITE["goal_margin"], delta=1.0
+        )
 
         # Check turn curvature radius >= MIN_TURN_RADIUS
         pts = track.waypoints_forward[:, :2]
@@ -90,6 +110,9 @@ class TestModularTrackGenerator(unittest.TestCase):
             self.assertEqual(loaded.nominal_length, track.nominal_length)
             self.assertEqual(loaded.max_episode_steps, track.max_episode_steps)
             self.assertEqual(len(loaded.obstacles), len(track.obstacles))
+            np.testing.assert_allclose(
+                loaded.corridor_half_widths, track.corridor_half_widths
+            )
 
             orig_dyn = [o for o in track.obstacles if o.is_dynamic]
             loaded_dyn = [o for o in loaded.obstacles if o.is_dynamic]
@@ -98,6 +121,17 @@ class TestModularTrackGenerator(unittest.TestCase):
                 self.assertEqual(
                     orig_dyn[0].patrol_distance, loaded_dyn[0].patrol_distance
                 )
+
+    def test_rectangular_yard_rejects_bad_entry(self) -> None:
+        """Verify yard entry/goal validation fails fast on bad dimensions."""
+        from src.sim.track_generator import RectangularYardZone
+
+        with self.assertRaises(ValueError):
+            RectangularYardZone(length=60.0, width=40.0, entry_width=39.0)
+        with self.assertRaises(ValueError):
+            RectangularYardZone(length=60.0, width=40.0, entry_offset=30.0)
+        with self.assertRaises(ValueError):
+            RectangularYardZone(length=60.0, width=40.0, goal_margin=2.0)
 
     def test_dynamic_entity_patrol_step(self) -> None:
         """Verify dynamic obstacle steps along velocity and bounces at patrol boundary."""
@@ -126,6 +160,49 @@ class TestModularTrackGenerator(unittest.TestCase):
         for _ in range(15):
             entity.step(0.1)
         self.assertLess(entity.world_vx, 0.0)
+
+    def test_dynamic_ped_swept_path_clear_of_statics(self) -> None:
+        """Verify every dynamic ped's full patrol corridor clears all statics."""
+        from src.sim.track_generator import PED_PATROL_CLEARANCE_MARGIN
+
+        for seed in [42, *range(100, 120)]:
+            track = self.gen.generate_estadio_ho_chi_min(seed=seed)
+            for ped in track.obstacles:
+                if not ped.is_dynamic:
+                    continue
+                speed = math.hypot(ped.world_vx, ped.world_vy)
+                self.assertGreater(speed, 1e-4, f"{seed}/{ped.name} has no velocity")
+                dir_x, dir_y = ped.world_vx / speed, ped.world_vy / speed
+                for static in track.obstacles:
+                    if static.is_dynamic:
+                        continue
+                    seg_x, seg_y = dir_x * ped.patrol_distance, dir_y * ped.patrol_distance
+                    seg_len2 = seg_x * seg_x + seg_y * seg_y
+                    if seg_len2 < 1e-8:
+                        clearance = math.hypot(
+                            ped.origin_x - static.world_x, ped.origin_y - static.world_y
+                        )
+                    else:
+                        t = max(
+                            0.0,
+                            min(
+                                1.0,
+                                (
+                                    (static.world_x - ped.origin_x) * seg_x
+                                    + (static.world_y - ped.origin_y) * seg_y
+                                )
+                                / seg_len2,
+                            ),
+                        )
+                        clearance = math.hypot(
+                            ped.origin_x + t * seg_x - static.world_x,
+                            ped.origin_y + t * seg_y - static.world_y,
+                        )
+                    self.assertGreaterEqual(
+                        clearance - (ped.radius + static.radius),
+                        PED_PATROL_CLEARANCE_MARGIN - 1e-6,
+                        f"{seed}/{ped.name} patrol clips {static.name}",
+                    )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
     <self_collide>false</self_collide>
     <link name="chassis">
       <sensor name="lidar_front" type="gpu_lidar">
-        <pose>1.45 0 0.6 0 0.349066 0</pose>
+        <pose>2.175 0 0.9 0 0.349066 0</pose>
         <topic>/tractor/lidar/front/points</topic>
         <update_rate>20</update_rate>
         <always_on>true</always_on>
@@ -32,7 +32,7 @@
         </ray>
       </sensor>
       <sensor name="lidar_rear" type="gpu_lidar">
-        <pose>-1.45 0 0.6 0 0.349066 3.141592654</pose>
+        <pose>-2.175 0 0.9 0 0.349066 3.141592654</pose>
         <topic>/tractor/lidar/rear/points</topic>
         <update_rate>20</update_rate>
         <always_on>true</always_on>
@@ -60,22 +60,22 @@
         </ray>
       </sensor>
       <inertial>
-        <pose>0 0 0.5 0 0 0</pose>
+        <pose>0 0 0.75 0 0 0</pose>
         <mass>300.0</mass>
         <inertia>
-          <ixx>33.48499999999999</ixx>
-          <iyy>124.77250000000002</iyy>
-          <izz>155.13250000000002</izz>
+          <ixx>73.38812499999999</ixx>
+          <iyy>278.785</iyy>
+          <izz>349.048125</izz>
           <ixy>0</ixy>
           <ixz>0</ixz>
           <iyz>0</iyz>
         </inertia>
       </inertial>
       <visual name="connecting_beam_visual">
-        <pose>0 0 0.5 0 0 0</pose>
+        <pose>0 0 0.75 0 0 0</pose>
         <geometry>
           <box>
-            <size>2 0.15 0.15</size>
+            <size>3 0.225 0.225</size>
           </box>
         </geometry>
         <material>
@@ -84,10 +84,10 @@
         </material>
       </visual>
       <collision name="connecting_beam_collision">
-        <pose>0 0 0.5 0 0 0</pose>
+        <pose>0 0 0.75 0 0 0</pose>
         <geometry>
           <box>
-            <size>2 0.15 0.15</size>
+            <size>3 0.225 0.225</size>
           </box>
         </geometry>
         <surface>
@@ -100,10 +100,10 @@
         </surface>
       </collision>
       <collision name="chassis_body_collision">
-        <pose>0 0 0.55 0 0 0</pose>
+        <pose>0 0 0.825 0 0 0</pose>
         <geometry>
           <box>
-            <size>2.9 1.72 0.4</size>
+            <size>4.35 2.58 0.6</size>
           </box>
         </geometry>
         <surface>
@@ -130,11 +130,11 @@
         <topic>/model/tractor/imu</topic>
       </sensor>
       <visual name="rear_axle_visual">
-        <pose>-1 0 0.5 -1.570796327 0 0</pose>
+        <pose>-1.5 0 0.75 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.11004810042424999</radius>
-            <length>1.13</length>
+            <radius>0.16507215063637498</radius>
+            <length>1.6949999999999998</length>
           </cylinder>
         </geometry>
         <material>
@@ -143,11 +143,11 @@
         </material>
       </visual>
       <visual name="front_axle_visual">
-        <pose>1 0 0.371419744 -1.570796327 0 0</pose>
+        <pose>1.5 0 0.5571296159 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.0663142122398004</radius>
-            <length>1.13</length>
+            <radius>0.0994713183597006</radius>
+            <length>1.6949999999999998</length>
           </cylinder>
         </geometry>
         <material>
@@ -157,13 +157,13 @@
       </visual>
     </link>
     <link name="rear_left_wheel">
-      <pose>-1 0.7 0.5 0 0 0</pose>
+      <pose>-1.5 1.05 0.75 0 0 0</pose>
       <inertial>
         <mass>35.0</mass>
         <inertia>
-          <ixx>2.4001249999999996</ixx>
-          <iyy>4.375</iyy>
-          <izz>2.4001249999999996</izz>
+          <ixx>5.40028125</ixx>
+          <iyy>9.84375</iyy>
+          <izz>5.40028125</izz>
           <ixy>0</ixy>
           <ixz>0</ixz>
           <iyz>0</iyz>
@@ -173,8 +173,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.5</radius>
-            <length>0.27</length>
+            <radius>0.75</radius>
+            <length>0.405</length>
           </cylinder>
         </geometry>
         <material>
@@ -186,8 +186,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.5</radius>
-            <length>0.27</length>
+            <radius>0.75</radius>
+            <length>0.405</length>
           </cylinder>
         </geometry>
         <surface>
@@ -213,8 +213,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.22</radius>
-            <length>0.276</length>
+            <radius>0.33</radius>
+            <length>0.41100000000000003</length>
           </cylinder>
         </geometry>
         <material>
@@ -225,7 +225,7 @@
       <visual name="rotation_marker">
         <geometry>
           <box>
-            <size>0.035 0.28 0.8</size>
+            <size>0.035 0.415 1.2</size>
           </box>
         </geometry>
         <material>
@@ -251,13 +251,13 @@
       </axis>
     </joint>
     <link name="rear_right_wheel">
-      <pose>-1 -0.7 0.5 0 0 0</pose>
+      <pose>-1.5 -1.05 0.75 0 0 0</pose>
       <inertial>
         <mass>35.0</mass>
         <inertia>
-          <ixx>2.4001249999999996</ixx>
-          <iyy>4.375</iyy>
-          <izz>2.4001249999999996</izz>
+          <ixx>5.40028125</ixx>
+          <iyy>9.84375</iyy>
+          <izz>5.40028125</izz>
           <ixy>0</ixy>
           <ixz>0</ixz>
           <iyz>0</iyz>
@@ -267,8 +267,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.5</radius>
-            <length>0.27</length>
+            <radius>0.75</radius>
+            <length>0.405</length>
           </cylinder>
         </geometry>
         <material>
@@ -280,8 +280,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.5</radius>
-            <length>0.27</length>
+            <radius>0.75</radius>
+            <length>0.405</length>
           </cylinder>
         </geometry>
         <surface>
@@ -307,8 +307,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.22</radius>
-            <length>0.276</length>
+            <radius>0.33</radius>
+            <length>0.41100000000000003</length>
           </cylinder>
         </geometry>
         <material>
@@ -319,7 +319,7 @@
       <visual name="rotation_marker">
         <geometry>
           <box>
-            <size>0.035 0.28 0.8</size>
+            <size>0.035 0.415 1.2</size>
           </box>
         </geometry>
         <material>
@@ -345,7 +345,7 @@
       </axis>
     </joint>
     <link name="front_left_knuckle">
-      <pose>1 0.565 0.371419744 0 0 0</pose>
+      <pose>1.5 0.8475 0.5571296159 0 0 0</pose>
       <inertial>
         <mass>2.0</mass>
         <inertia>
@@ -375,13 +375,13 @@
       </axis>
     </joint>
     <link name="front_left_wheel">
-      <pose>1 0.645 0.371419744 0 0 0</pose>
+      <pose>1.5 0.9675 0.5571296159 0 0 0</pose>
       <inertial>
         <mass>20.0</mass>
         <inertia>
-          <ixx>0.7271666666666666</ixx>
-          <iyy>1.369</iyy>
-          <izz>0.7271666666666666</izz>
+          <ixx>1.6361249999999996</ixx>
+          <iyy>3.0802499999999995</iyy>
+          <izz>1.6361249999999996</izz>
           <ixy>0</ixy>
           <ixz>0</ixz>
           <iyz>0</iyz>
@@ -391,8 +391,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.37</radius>
-            <length>0.16</length>
+            <radius>0.5549999999999999</radius>
+            <length>0.24</length>
           </cylinder>
         </geometry>
         <material>
@@ -404,8 +404,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.37</radius>
-            <length>0.16</length>
+            <radius>0.5549999999999999</radius>
+            <length>0.24</length>
           </cylinder>
         </geometry>
         <surface>
@@ -431,8 +431,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.1628</radius>
-            <length>0.166</length>
+            <radius>0.24419999999999997</radius>
+            <length>0.246</length>
           </cylinder>
         </geometry>
         <material>
@@ -443,7 +443,7 @@
       <visual name="rotation_marker">
         <geometry>
           <box>
-            <size>0.035 0.17 0.592</size>
+            <size>0.035 0.25 0.888</size>
           </box>
         </geometry>
         <material>
@@ -469,7 +469,7 @@
       </axis>
     </joint>
     <link name="front_right_knuckle">
-      <pose>1 -0.565 0.371419744 0 0 0</pose>
+      <pose>1.5 -0.8475 0.5571296159 0 0 0</pose>
       <inertial>
         <mass>2.0</mass>
         <inertia>
@@ -499,13 +499,13 @@
       </axis>
     </joint>
     <link name="front_right_wheel">
-      <pose>1 -0.645 0.371419744 0 0 0</pose>
+      <pose>1.5 -0.9675 0.5571296159 0 0 0</pose>
       <inertial>
         <mass>20.0</mass>
         <inertia>
-          <ixx>0.7271666666666666</ixx>
-          <iyy>1.369</iyy>
-          <izz>0.7271666666666666</izz>
+          <ixx>1.6361249999999996</ixx>
+          <iyy>3.0802499999999995</iyy>
+          <izz>1.6361249999999996</izz>
           <ixy>0</ixy>
           <ixz>0</ixz>
           <iyz>0</iyz>
@@ -515,8 +515,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.37</radius>
-            <length>0.16</length>
+            <radius>0.5549999999999999</radius>
+            <length>0.24</length>
           </cylinder>
         </geometry>
         <material>
@@ -528,8 +528,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.37</radius>
-            <length>0.16</length>
+            <radius>0.5549999999999999</radius>
+            <length>0.24</length>
           </cylinder>
         </geometry>
         <surface>
@@ -555,8 +555,8 @@
         <pose>0 0 0 -1.570796327 0 0</pose>
         <geometry>
           <cylinder>
-            <radius>0.1628</radius>
-            <length>0.166</length>
+            <radius>0.24419999999999997</radius>
+            <length>0.246</length>
           </cylinder>
         </geometry>
         <material>
@@ -567,7 +567,7 @@
       <visual name="rotation_marker">
         <geometry>
           <box>
-            <size>0.035 0.17 0.592</size>
+            <size>0.035 0.25 0.888</size>
           </box>
         </geometry>
         <material>
@@ -593,14 +593,14 @@
       </axis>
     </joint>
     <frame name="rear_axle" attached_to="chassis">
-      <pose relative_to="chassis">-1 0 0.5 0 0 0</pose>
+      <pose relative_to="chassis">-1.5 0 0.75 0 0 0</pose>
     </frame>
     <plugin name="gz::sim::systems::AckermannSteering" filename="gz-sim-ackermann-steering-system">
       <steering_only>true</steering_only>
       <left_steering_joint>front_left_steering</left_steering_joint>
       <right_steering_joint>front_right_steering</right_steering_joint>
-      <wheel_base>2.0</wheel_base>
-      <wheel_separation>1.13</wheel_separation>
+      <wheel_base>3.0</wheel_base>
+      <wheel_separation>1.6949999999999998</wheel_separation>
       <steering_limit>0.4</steering_limit>
       <steer_p_gain>4.0</steer_p_gain>
       <topic>/model/tractor/steering_angle</topic>
@@ -608,8 +608,8 @@
     <plugin name="gz::sim::systems::DiffDrive" filename="gz-sim-diff-drive-system">
       <left_joint>rear_left_spin</left_joint>
       <right_joint>rear_right_spin</right_joint>
-      <wheel_separation>1.4</wheel_separation>
-      <wheel_radius>0.5</wheel_radius>
+      <wheel_separation>2.0999999999999996</wheel_separation>
+      <wheel_radius>0.75</wheel_radius>
       <topic>/model/tractor/rear_axle/cmd_vel</topic>
       <odom_topic>/model/tractor/wheel_odometry</odom_topic>
       <tf_topic>/model/tractor/wheel_odometry_tf</tf_topic>

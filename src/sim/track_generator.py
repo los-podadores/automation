@@ -1,9 +1,9 @@
 """Modular procedural track generator for autonomous car navigation.
 
-Synthesizes composable road zones (straight corridors, acute/right/sweeping turns,
-wide open yards with perimeter walls, and terminal turnaround courtyards). Supports
-both static and dynamic obstacles, scalable lengths, dynamic fair episode limits,
-and plug-and-play demo presets (including Demo 1: straight + -90 degree turn).
+Synthesizes composable road zones (straight corridors, curved turns, and
+survey-driven rectangular yards with gated entries). Supports static and
+dynamic obstacles, scalable lengths, dynamic fair episode limits, and
+plug-and-play demo presets (including the Estadio Ho Chi Minh site).
 """
 
 from __future__ import annotations
@@ -23,8 +23,58 @@ DEFAULT_WALL_HEIGHT: Final[float] = 1.20
 DEFAULT_WALL_THICKNESS: Final[float] = 0.25
 DEFAULT_ROAD_WIDTH: Final[float] = 7.0  # Two-lane corridor road width (meters)
 MIN_TURN_RADIUS: Final[float] = 6.5  # Guaranteed minimum curvature radius (meters)
+MIN_YARD_LENGTH: Final[float] = 25.0  # Shortest rectangular yard (meters)
+MIN_YARD_WIDTH: Final[float] = 14.0  # Narrowest rectangular yard (meters)
 DEFAULT_PRESET: Final[str] = "estadio_ho_chi_min"
 PRESETS: Final[tuple[str, ...]] = ("estadio_ho_chi_min", "random")
+
+ESTADIO_SITE: Final[dict[str, float]] = {
+    "road_length": 100.0,
+    "road_width": 7.0,
+    "turn_radius": 8.0,
+    "yard_length": 60.0,
+    "yard_width": 40.0,
+    "entry_width": 7.0,
+    "entry_offset": 0.0,
+    "goal_margin": 8.0,
+}
+
+
+PED_PATROL_CLEARANCE_MARGIN: Final[float] = 0.5  # Extra gap beyond radii sums
+
+def _ped_swept_path_clear(
+    obstacles: list[SimulatedEntity],
+    ox: float,
+    oy: float,
+    dir_x: float,
+    dir_y: float,
+    patrol_distance: float,
+    ped_radius: float,
+) -> bool:
+    """Check whether a ped's full patrol corridor is clear of static obstacles."""
+    for o in obstacles:
+        if o.is_dynamic:
+            continue
+        # Distance from static obstacle center to the patrol segment.
+        seg_dx = dir_x * patrol_distance
+        seg_dy = dir_y * patrol_distance
+        seg_len2 = seg_dx * seg_dx + seg_dy * seg_dy
+        if seg_len2 < 1e-8:
+            clearance = math.hypot(ox - o.world_x, oy - o.world_y)
+        else:
+            t = max(
+                0.0,
+                min(
+                    1.0,
+                    ((o.world_x - ox) * seg_dx + (o.world_y - oy) * seg_dy) / seg_len2,
+                ),
+            )
+            cx = ox + t * seg_dx
+            cy = oy + t * seg_dy
+            clearance = math.hypot(cx - o.world_x, cy - o.world_y)
+        if clearance < ped_radius + o.radius + PED_PATROL_CLEARANCE_MARGIN:
+            return False
+    return True
 
 
 @dataclass
@@ -39,10 +89,14 @@ class ZoneResult:
     exit_y: float
     exit_heading: float
     length: float
+    half_widths: list[float] | None = None  # Per centerline_pt drivable half-width
+    wall_loops: list[list[tuple[float, float]]] | None = None  # Closed polygons
 
 
 class TrackZone(ABC):
     """Abstract base class for a composable procedural track zone."""
+
+    closes_track: bool = False
 
     @abstractmethod
     def generate(
@@ -64,13 +118,13 @@ class StraightCorridorZone(TrackZone):
         length: float = 35.0,
         road_width: float = DEFAULT_ROAD_WIDTH,
         num_obstacles: int = 1,
-        has_dynamic_ped: bool = False,
+        num_dynamic_peds: int = 0,
         allow_gate_opening: bool = False,
     ) -> None:
         self.length = max(10.0, length)
         self.road_width = road_width
         self.num_obstacles = num_obstacles
-        self.has_dynamic_ped = has_dynamic_ped
+        self.num_dynamic_peds = num_dynamic_peds
         self.allow_gate_opening = allow_gate_opening
 
     def generate(
@@ -107,10 +161,12 @@ class StraightCorridorZone(TrackZone):
         if self.num_obstacles > 0 and self.length >= 15.0:
             obs_palette = [
                 ("Traffic Barrel", 3, 0.45, "cylinder", 0.0, 0.0, 0.9),
+                ("Traffic Cone", 3, 0.30, "cylinder", 0.0, 0.0, 0.75),
+                ("Tire Stack", 3, 0.55, "cylinder", 0.0, 0.0, 0.8),
+                ("Pallet Stack", 3, 0.90, "box", 1.2, 1.2, 1.0),
                 ("Car", 1, 0.95, "cylinder", 0.0, 0.0, 1.4),
                 ("Tree", 3, 0.50, "cylinder", 0.0, 0.0, 2.5),
             ]
-            side_sign = 1.0 if rng.random() > 0.5 else -1.0
             margin = min(12.0, self.length * 0.3)
             avail_length = max(5.0, self.length - 2 * margin)
             gap = avail_length / float(self.num_obstacles + 1)
@@ -123,9 +179,15 @@ class StraightCorridorZone(TrackZone):
                 name, cid, r, shape, l_dim, w, h = obs_palette[
                     int(rng.integers(0, len(obs_palette)))
                 ]
-                lat_offset = side_sign * (half_w - r - 0.35)
+                side = 1.0 if rng.random() > 0.5 else -1.0
+                lat_offset = side * (half_w - r - float(rng.uniform(0.2, 1.0)))
                 ox = cx - lat_offset * sin_h
                 oy = cy + lat_offset * cos_h
+                yaw = (
+                    start_heading + float(rng.uniform(-0.5, 0.5))
+                    if shape == "box"
+                    else start_heading
+                )
 
                 obstacles.append(
                     SimulatedEntity(
@@ -141,41 +203,59 @@ class StraightCorridorZone(TrackZone):
                         length=l_dim,
                         width=w,
                         height=h,
-                        yaw=start_heading,
+                        yaw=yaw,
                         is_dynamic=False,
                     )
                 )
-                side_sign *= -1.0
 
-        if self.has_dynamic_ped and self.length >= 20.0:
-            ped_dist = self.length * 0.5
-            p_idx = min(n_steps - 1, int(ped_dist / step_size))
-            px, py = float(xs[p_idx]), float(ys[p_idx])
-            start_offset = -(half_w - 0.6)
-            ox = px - start_offset * sin_h
-            oy = py + start_offset * cos_h
-            cross_speed = 0.75
-            vx = -cross_speed * sin_h
-            vy = cross_speed * cos_h
-            obstacles.append(
-                SimulatedEntity(
-                    name=f"dynamic_ped_{len(obstacles)}",
-                    class_id=2,
-                    class_name="Person",
-                    world_x=ox,
-                    world_y=oy,
-                    world_vx=vx,
-                    world_vy=vy,
-                    radius=0.40,
-                    shape="cylinder",
-                    height=1.75,
-                    yaw=start_heading + math.pi / 2,
-                    is_dynamic=True,
-                    patrol_distance=self.road_width - 1.2,
-                    origin_x=ox,
-                    origin_y=oy,
+        for k in range(max(0, self.num_dynamic_peds)):
+            if self.length < 20.0:
+                raise ValueError(
+                    f"StraightCorridorZone length {self.length} < 20.0: no room for dynamic peds"
                 )
-            )
+            patrol_distance = self.road_width - 1.2
+            placed_ped = False
+            for _ in range(12):
+                ped_dist = float(rng.uniform(0.25 * self.length, 0.75 * self.length))
+                p_idx = min(n_steps - 1, max(0, int(ped_dist / step_size)))
+                px, py = float(xs[p_idx]), float(ys[p_idx])
+                side = 1.0 if rng.random() > 0.5 else -1.0
+                start_offset = side * (half_w - 0.6)
+                ox = px - start_offset * sin_h
+                oy = py + start_offset * cos_h
+                cross_speed = float(rng.uniform(0.6, 1.1))
+                vx = side * cross_speed * sin_h
+                vy = -side * cross_speed * cos_h
+                speed = math.hypot(vx, vy)
+                if speed < 1e-4 or not _ped_swept_path_clear(
+                    obstacles, ox, oy, vx / speed, vy / speed, patrol_distance, 0.40
+                ):
+                    continue
+                obstacles.append(
+                    SimulatedEntity(
+                        name=f"dynamic_ped_{k}_{len(obstacles)}",
+                        class_id=2,
+                        class_name="Person",
+                        world_x=ox,
+                        world_y=oy,
+                        world_vx=vx,
+                        world_vy=vy,
+                        radius=0.40,
+                        shape="cylinder",
+                        height=1.75,
+                        yaw=start_heading + math.pi / 2,
+                        is_dynamic=True,
+                        patrol_distance=patrol_distance,
+                        origin_x=ox,
+                        origin_y=oy,
+                    )
+                )
+                placed_ped = True
+                break
+            if not placed_ped:
+                raise RuntimeError(
+                    "StraightCorridorZone: could not place dynamic ped clear of statics"
+                )
 
         exit_x = float(xs[-1])
         exit_y = float(ys[-1])
@@ -188,6 +268,7 @@ class StraightCorridorZone(TrackZone):
             exit_y=exit_y,
             exit_heading=start_heading,
             length=self.length,
+            half_widths=[self.road_width / 2.0] * len(centerline_pts),
         )
 
 
@@ -304,25 +385,61 @@ class TurnCorridorZone(TrackZone):
             exit_y=exit_y,
             exit_heading=exit_heading,
             length=arc_length,
+            half_widths=[self.road_width / 2.0] * len(centerline_pts),
         )
 
 
-class OpenPlazaZone(TrackZone):
-    """Wide open yard/lot enclosed within perimeter walls (25m - 35m width).
+class RectangularYardZone(TrackZone):
+    """Survey-driven rectangular yard with a gated entry wall (closes track)."""
 
-    Features large static obstacles (shipping containers, delivery trucks,
-    roundabouts) and dynamic pedestrians, allowing diverse maneuvering paths.
-    """
+    closes_track: bool = True
 
     def __init__(
         self,
-        length: float = 40.0,
-        yard_width: float = 30.0,
+        length: float = 60.0,
+        width: float = 40.0,
         road_width: float = DEFAULT_ROAD_WIDTH,
+        entry_width: float | None = None,
+        entry_offset: float = 0.0,
+        yard_heading: float | None = None,
+        goal_margin: float = 8.0,
+        num_static_obstacles: int = 2,
+        num_dynamic_peds: int = 1,
     ) -> None:
-        self.length = max(25.0, length)
-        self.yard_width = max(22.0, yard_width)
+        self.length = max(MIN_YARD_LENGTH, length)
+        self.width = max(MIN_YARD_WIDTH, width)
         self.road_width = road_width
+        ew = road_width if entry_width is None else entry_width
+        if not (2.0 <= ew <= min(self.width - 4.0, road_width + 4.0)):
+            raise ValueError(
+                f"entry_width {ew} out of range [2.0, {min(self.width - 4.0, road_width + 4.0)}]"
+            )
+        self.entry_width = ew
+        post = self.width / 2.0 - self.entry_width / 2.0 - 1.0
+        if not (-post <= entry_offset <= post):
+            raise ValueError(
+                f"entry_offset {entry_offset} out of range [{-post}, {post}]"
+            )
+        self.entry_offset = entry_offset
+        if not (4.0 <= goal_margin <= self.length - 10.0):
+            raise ValueError(
+                f"goal_margin {goal_margin} out of range [4.0, {self.length - 10.0}]"
+            )
+        self.goal_margin = goal_margin
+        self.yard_heading = yard_heading
+        self.num_static_obstacles = num_static_obstacles
+        self.num_dynamic_peds = num_dynamic_peds
+
+    def _point_to_segment_dist(
+        self, px: float, py: float, x1: float, y1: float, x2: float, y2: float
+    ) -> float:
+        dx = x2 - x1
+        dy = y2 - y1
+        l2 = dx * dx + dy * dy
+        if l2 < 1e-8:
+            return math.hypot(px - x1, py - y1)
+        t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / l2))
+        return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 
     def generate(
         self,
@@ -331,184 +448,151 @@ class OpenPlazaZone(TrackZone):
         start_heading: float,
         rng: np.random.Generator,
     ) -> ZoneResult:
+        yh = start_heading if self.yard_heading is None else self.yard_heading
+        ux, uy = math.cos(yh), math.sin(yh)
+        vx, vy = -uy, ux
+
+        def to_world(u: float, v: float) -> tuple[float, float]:
+            return (start_x + u * ux + v * vx, start_y + u * uy + v * vy)
+
+        # Centerline: entry-gap center straight to interior goal.
+        goal_u = self.length - self.goal_margin
         step_size = 0.4
-        n_steps = max(10, int(round(self.length / step_size)) + 1)
-        dists = np.linspace(0.0, self.length, n_steps, dtype=np.float32)
-
-        cos_h = math.cos(start_heading)
-        sin_h = math.sin(start_heading)
-
-        xs = start_x + dists * cos_h
-        ys = start_y + dists * sin_h
+        n_steps = max(10, int(round(goal_u / step_size)) + 1)
+        us = np.linspace(0.0, goal_u, n_steps, dtype=np.float32)
+        xs = start_x + us * ux
+        ys = start_y + us * uy
         centerline_pts = np.column_stack([xs, ys])
 
-        # Funnel expansion & perimeter walls:
-        # 0% - 20%: expand from road_width to yard_width
-        # 20% - 80%: maintain wide yard_width
-        # 80% - 100%: contract from yard_width back to road_width
-        left_wall_pts: list[tuple[float, float]] = []
-        right_wall_pts: list[tuple[float, float]] = []
+        # Closed rectangle loop; entry side (u=0) split around the gap.
+        hw = self.width / 2.0
+        gap_lo = self.entry_offset - self.entry_width / 2.0
+        gap_hi = self.entry_offset + self.entry_width / 2.0
+        loop: list[tuple[float, float]] = []
 
-        for i, (x, y) in enumerate(zip(xs, ys)):
-            progress = i / float(n_steps - 1)
-            if progress < 0.20:
-                t = progress / 0.20
-                w = self.road_width + t * (self.yard_width - self.road_width)
-            elif progress > 0.80:
-                t = (progress - 0.80) / 0.20
-                w = self.yard_width - t * (self.yard_width - self.road_width)
-            else:
-                w = self.yard_width
+        def append_run(p0: tuple[float, float], p1: tuple[float, float]) -> None:
+            run_len = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            n = max(2, int(round(run_len / step_size)) + 1)
+            start_i = 1 if loop else 0
+            for i in range(start_i, n):
+                t = i / float(n - 1)
+                loop.append(
+                    (p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t)
+                )
 
-            hw = w / 2.0
-            left_wall_pts.append((float(x - hw * sin_h), float(y + hw * cos_h)))
-            right_wall_pts.append((float(x + hw * sin_h), float(y - hw * cos_h)))
+        # Clockwise from the gap's high post: entry post -> far wall -> exit post.
+        append_run(to_world(0.0, gap_hi), to_world(0.0, hw))
+        append_run(to_world(0.0, hw), to_world(self.length, hw))
+        append_run(to_world(self.length, hw), to_world(self.length, -hw))
+        append_run(to_world(self.length, -hw), to_world(0.0, -hw))
+        append_run(to_world(0.0, -hw), to_world(0.0, gap_lo))
 
-        # Place LARGE and DIVERSE obstacles in the open zone
         obstacles: list[SimulatedEntity] = []
-        mid_x = float(start_x + (self.length * 0.5) * cos_h)
-        mid_y = float(start_y + (self.length * 0.5) * sin_h)
+        ex, ey = float(xs[0]), float(ys[0])
+        gx, gy = float(xs[-1]), float(ys[-1])
+        prop_palette = [
+            ("yard_shipping_container", 3, "Shipping Container", 2.8, "box", 6.0, 2.4, 2.6),
+            ("yard_delivery_truck", 1, "Car", 2.2, "box", 5.5, 2.2, 2.4),
+            ("yard_storage_tank", 3, "Storage Tank", 1.8, "cylinder", 0.0, 0.0, 3.0),
+            ("yard_dumpster", 3, "Dumpster", 1.4, "box", 2.2, 1.3, 1.4),
+            ("yard_generator_pallet", 3, "Pallet Stack", 1.0, "box", 1.4, 1.4, 1.1),
+            ("yard_tire_stack", 3, "Tire Stack", 0.6, "cylinder", 0.0, 0.0, 0.9),
+            ("yard_traffic_barrel", 3, "Traffic Barrel", 0.45, "cylinder", 0.0, 0.0, 0.9),
+        ]
+        for k in range(max(0, self.num_static_obstacles)):
+            name, cid, cname, r, shape, ln, w, h = prop_palette[
+                int(rng.integers(0, len(prop_palette)))
+            ]
+            placed = False
+            for _ in range(12):
+                su = float(rng.uniform(0.15 * self.length, 0.90 * self.length))
+                sv = float(rng.uniform(-(hw - 2.5), hw - 2.5))
+                ox, oy = to_world(su, sv)
+                if self._point_to_segment_dist(ox, oy, ex, ey, gx, gy) < 3.5 + r:
+                    continue
+                if math.hypot(ox - gx, oy - gy) < 2.5 + r:
+                    continue
+                if any(
+                    math.hypot(ox - o.world_x, oy - o.world_y) < 2.0 + r + o.radius
+                    for o in obstacles
+                ):
+                    continue
+                obstacles.append(
+                    SimulatedEntity(
+                        name=f"{name}_{k}",
+                        class_id=cid,
+                        class_name=cname,
+                        world_x=ox,
+                        world_y=oy,
+                        world_vx=0.0,
+                        world_vy=0.0,
+                        radius=r,
+                        shape=shape,
+                        length=ln,
+                        width=w,
+                        height=h,
+                        yaw=yh + float(rng.uniform(-0.6, 0.6)),
+                        is_dynamic=False,
+                    )
+                )
+                placed = True
+                break
+            if not placed:
+                raise RuntimeError(f"RectangularYardZone: could not place {name} clear of path")
+        for k in range(max(0, self.num_dynamic_peds)):
+            patrol_distance = min(self.width * 0.5, 12.0)
+            placed_ped = False
+            for _ in range(12):
+                pv = float(rng.uniform(-hw * 0.4, hw * 0.4))
+                pu = float(rng.uniform(goal_u * 0.3, goal_u * 0.7))
+                px, py = to_world(pu, pv)
+                cross_speed = float(rng.uniform(0.7, 1.2))
+                wvx, wvy = cross_speed * vx, cross_speed * vy
+                speed = math.hypot(wvx, wvy)
+                if speed < 1e-4 or not _ped_swept_path_clear(
+                    obstacles, px, py, wvx / speed, wvy / speed, patrol_distance, 0.40
+                ):
+                    continue
+                obstacles.append(
+                    SimulatedEntity(
+                        name=f"yard_crossing_pedestrian_{k}",
+                        class_id=2,
+                        class_name="Person",
+                        world_x=px,
+                        world_y=py,
+                        world_vx=wvx,
+                        world_vy=wvy,
+                        radius=0.40,
+                        shape="cylinder",
+                        height=1.8,
+                        yaw=yh - math.pi / 2,
+                        is_dynamic=True,
+                        patrol_distance=patrol_distance,
+                        origin_x=px,
+                        origin_y=py,
+                    )
+                )
+                placed_ped = True
+                break
+            if not placed_ped:
+                raise RuntimeError(
+                    "RectangularYardZone: could not place dynamic ped clear of statics"
+                )
 
-        # 1. Shipping Container (Large static box)
-        container_lat = float(rng.uniform(6.0, 9.0)) * (
-            -1.0 if rng.random() > 0.5 else 1.0
-        )
-        cont_x = mid_x - container_lat * sin_h - 4.0 * cos_h
-        cont_y = mid_y + container_lat * cos_h - 4.0 * sin_h
-        obstacles.append(
-            SimulatedEntity(
-                name="plaza_shipping_container",
-                class_id=3,
-                class_name="Shipping Container",
-                world_x=cont_x,
-                world_y=cont_y,
-                world_vx=0.0,
-                world_vy=0.0,
-                radius=2.8,
-                shape="box",
-                length=6.0,
-                width=2.4,
-                height=2.6,
-                yaw=start_heading + float(rng.uniform(-0.3, 0.3)),
-                is_dynamic=False,
-            )
-        )
-
-        # 2. Large Delivery Truck / Van
-        truck_lat = -container_lat * 0.85
-        truck_x = mid_x - truck_lat * sin_h + 5.0 * cos_h
-        truck_y = mid_y + truck_lat * cos_h + 5.0 * sin_h
-        obstacles.append(
-            SimulatedEntity(
-                name="plaza_delivery_truck",
-                class_id=1,
-                class_name="Car",
-                world_x=truck_x,
-                world_y=truck_y,
-                world_vx=0.0,
-                world_vy=0.0,
-                radius=2.2,
-                shape="box",
-                length=5.5,
-                width=2.2,
-                height=2.4,
-                yaw=start_heading + math.pi / 2,
-                is_dynamic=False,
-            )
-        )
-
-        # 3. Dynamic Pedestrian traversing the wide lot
-        ped_x = mid_x - (self.yard_width * 0.35) * sin_h
-        ped_y = mid_y + (self.yard_width * 0.35) * cos_h
-        cross_speed = 0.9
-        vx = cross_speed * sin_h
-        vy = -cross_speed * cos_h
-        obstacles.append(
-            SimulatedEntity(
-                name="plaza_crossing_pedestrian",
-                class_id=2,
-                class_name="Person",
-                world_x=ped_x,
-                world_y=ped_y,
-                world_vx=vx,
-                world_vy=vy,
-                radius=0.40,
-                shape="cylinder",
-                height=1.8,
-                yaw=start_heading - math.pi / 2,
-                is_dynamic=True,
-                patrol_distance=self.yard_width * 0.65,
-                origin_x=ped_x,
-                origin_y=ped_y,
-            )
-        )
-
-        exit_x = float(xs[-1])
-        exit_y = float(ys[-1])
         return ZoneResult(
             centerline_pts=centerline_pts,
-            left_wall_pts=left_wall_pts,
-            right_wall_pts=right_wall_pts,
+            left_wall_pts=[],
+            right_wall_pts=[],
             obstacles=obstacles,
-            exit_x=exit_x,
-            exit_y=exit_y,
-            exit_heading=start_heading,
-            length=self.length,
+            exit_x=gx,
+            exit_y=gy,
+            exit_heading=yh,
+            length=float(goal_u),
+            half_widths=[self.width / 2.0] * len(centerline_pts),
+            wall_loops=[loop],
         )
 
 
-class TerminalCourtyardZone(TrackZone):
-    """Spacious turnaround courtyard at Point B destination with buffer wall."""
-
-    def __init__(
-        self,
-        length: float = 14.0,
-        courtyard_width: float = 18.0,
-        road_width: float = DEFAULT_ROAD_WIDTH,
-    ) -> None:
-        self.length = max(10.0, length)
-        self.courtyard_width = max(14.0, courtyard_width)
-        self.road_width = road_width
-
-    def generate(
-        self,
-        start_x: float,
-        start_y: float,
-        start_heading: float,
-        rng: np.random.Generator,
-    ) -> ZoneResult:
-        step_size = 0.4
-        n_steps = max(5, int(round(self.length / step_size)) + 1)
-        dists = np.linspace(0.0, self.length, n_steps, dtype=np.float32)
-        cos_h = math.cos(start_heading)
-        sin_h = math.sin(start_heading)
-
-        xs = start_x + dists * cos_h
-        ys = start_y + dists * sin_h
-        centerline_pts = np.column_stack([xs, ys])
-
-        left_wall_pts: list[tuple[float, float]] = []
-        right_wall_pts: list[tuple[float, float]] = []
-
-        for i, (x, y) in enumerate(zip(xs, ys)):
-            t = i / float(n_steps - 1)
-            w = self.road_width + t * (self.courtyard_width - self.road_width)
-            hw = w / 2.0
-            left_wall_pts.append((float(x - hw * sin_h), float(y + hw * cos_h)))
-            right_wall_pts.append((float(x + hw * sin_h), float(y - hw * cos_h)))
-
-        exit_x = float(xs[-1])
-        exit_y = float(ys[-1])
-        return ZoneResult(
-            centerline_pts=centerline_pts,
-            left_wall_pts=left_wall_pts,
-            right_wall_pts=right_wall_pts,
-            obstacles=[],
-            exit_x=exit_x,
-            exit_y=exit_y,
-            exit_heading=start_heading,
-            length=self.length,
-        )
 
 
 @dataclass(frozen=True)
@@ -524,6 +608,7 @@ class ProceduralTrack:
         tuple[tuple[float, float], tuple[float, float]]
     ]  # 2D line segments
     obstacles: list[SimulatedEntity]  # Static and dynamic obstacles
+    corridor_half_widths: np.ndarray  # Shape (K,) drivable half-width per waypoint
     road_width: float
     nominal_length: float
     max_episode_steps: int
@@ -566,6 +651,7 @@ class ProceduralTrack:
                 }
                 for obs in self.obstacles
             ],
+            "corridor_half_widths": self.corridor_half_widths.tolist(),
             "road_width": self.road_width,
         }
         output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -602,6 +688,20 @@ class ProceduralTrack:
         ]
         nom_len = data.get("nominal_length", 95.0)
         max_steps = data.get("max_episode_steps", 1200)
+        waypoints_forward = np.array(data["waypoints_forward"], dtype=np.float32)
+        raw_hw = data.get("corridor_half_widths")
+        if raw_hw is not None:
+            corridor_half_widths = np.array(raw_hw, dtype=np.float32)
+            if len(corridor_half_widths) != len(waypoints_forward):
+                raise ValueError(
+                    "corridor_half_widths length mismatch: "
+                    f"{len(corridor_half_widths)} != {len(waypoints_forward)}"
+                )
+        else:
+            # Pre-change artifact: fall back to uniform road half-width.
+            corridor_half_widths = np.full(
+                len(waypoints_forward), float(data["road_width"]) / 2.0, dtype=np.float32
+            )
 
         return cls(
             seed=data["seed"],
@@ -615,10 +715,11 @@ class ProceduralTrack:
                 data["goal_pose"][1],
                 data["goal_pose"][2],
             ),
-            waypoints_forward=np.array(data["waypoints_forward"], dtype=np.float32),
+            waypoints_forward=waypoints_forward,
             waypoints_reverse=np.array(data["waypoints_reverse"], dtype=np.float32),
             wall_segments=wall_segments,
             obstacles=obstacles,
+            corridor_half_widths=corridor_half_widths,
             road_width=float(data["road_width"]),
             nominal_length=float(nom_len),
             max_episode_steps=int(max_steps),
@@ -695,6 +796,13 @@ class ProceduralTrack:
                 else:
                     dir_x = math.cos(obs.yaw)
                     dir_y = math.sin(obs.yaw)
+                # Prismatic guide axis is resolved in the joint (child/model) frame,
+                # which inherits the model yaw: counter-rotate the world travel
+                # direction so the slider runs along the waypoint line.
+                cos_yaw = math.cos(obs.yaw)
+                sin_yaw = math.sin(obs.yaw)
+                ax_x = dir_x * cos_yaw + dir_y * sin_yaw
+                ax_y = -dir_x * sin_yaw + dir_y * cos_yaw
                 wp1_x = obs.origin_x
                 wp1_y = obs.origin_y
                 wp2_x = obs.origin_x + dir_x * obs.patrol_distance
@@ -718,7 +826,7 @@ class ProceduralTrack:
         <parent>world</parent>
         <child>slider</child>
         <axis>
-          <xyz>{dir_x:.4f} {dir_y:.4f} 0</xyz>
+          <xyz>{ax_x:.4f} {ax_y:.4f} 0</xyz>
           <limit>
             <lower>-0.2</lower>
             <upper>{obs.patrol_distance + 0.2:.3f}</upper>
@@ -959,8 +1067,11 @@ class ProceduralTrackGenerator:
         all_centerline: list[np.ndarray] = []
         all_left_walls: list[tuple[float, float]] = []
         all_right_walls: list[tuple[float, float]] = []
+        all_half_widths: list[float] = []
+        all_wall_loops: list[list[tuple[float, float]]] = []
         all_obstacles: list[SimulatedEntity] = []
         total_length = 0.0
+
 
         for zone in zones:
             res = zone.generate(curr_x, curr_y, curr_heading, rng)
@@ -968,6 +1079,11 @@ class ProceduralTrackGenerator:
             all_left_walls.extend(res.left_wall_pts)
             all_right_walls.extend(res.right_wall_pts)
             all_obstacles.extend(res.obstacles)
+            hw_list = res.half_widths
+            if hw_list is None:
+                hw_list = [self.default_road_width / 2.0] * len(res.centerline_pts)
+            all_half_widths.extend(hw_list)
+            all_wall_loops.extend(res.wall_loops or [])
             curr_x = res.exit_x
             curr_y = res.exit_y
             curr_heading = res.exit_heading
@@ -987,6 +1103,8 @@ class ProceduralTrackGenerator:
         s_query = np.linspace(0.0, total_dist, target_pts_count)
         xs = np.interp(s_query, cum_dists, clean_pts[:, 0]).astype(np.float32)
         ys = np.interp(s_query, cum_dists, clean_pts[:, 1]).astype(np.float32)
+        clean_hw = np.asarray(all_half_widths, dtype=np.float64)[keep_mask]
+        corridor_half_widths = np.interp(s_query, cum_dists, clean_hw).astype(np.float32)
 
         dxs = np.gradient(xs)
         dys = np.gradient(ys)
@@ -1012,21 +1130,35 @@ class ProceduralTrackGenerator:
 
         # Downsample wall points to prevent over-segmentation
         step_wall = 3
-        l_sampled = all_left_walls[::step_wall]
-        if not np.allclose(l_sampled[-1], all_left_walls[-1]):
-            l_sampled.append(all_left_walls[-1])
-        for i in range(len(l_sampled) - 1):
-            wall_segments.append((l_sampled[i], l_sampled[i + 1]))
+        has_paired_walls = bool(all_left_walls) and bool(all_right_walls)
+        if has_paired_walls:
+            l_sampled = all_left_walls[::step_wall]
+            if not np.allclose(l_sampled[-1], all_left_walls[-1]):
+                l_sampled.append(all_left_walls[-1])
+            for i in range(len(l_sampled) - 1):
+                wall_segments.append((l_sampled[i], l_sampled[i + 1]))
 
-        r_sampled = all_right_walls[::step_wall]
-        if not np.allclose(r_sampled[-1], all_right_walls[-1]):
-            r_sampled.append(all_right_walls[-1])
-        for i in range(len(r_sampled) - 1):
-            wall_segments.append((r_sampled[i], r_sampled[i + 1]))
+            r_sampled = all_right_walls[::step_wall]
+            if not np.allclose(r_sampled[-1], all_right_walls[-1]):
+                r_sampled.append(all_right_walls[-1])
+            for i in range(len(r_sampled) - 1):
+                wall_segments.append((r_sampled[i], r_sampled[i + 1]))
+
+        for loop in all_wall_loops:
+            if len(loop) < 2:
+                continue
+            sampled = loop[::step_wall]
+            if not np.allclose(sampled[-1], loop[-1]):
+                sampled.append(loop[-1])
+            for i in range(len(sampled) - 1):
+                wall_segments.append((sampled[i], sampled[i + 1]))
+            # No closing edge: yard loops intentionally leave the entry gap open.
 
         # Enclosing back wall behind Point A
-        first_l = l_sampled[0]
-        first_r = r_sampled[0]
+        if has_paired_walls:
+            first_l, first_r = l_sampled[0], r_sampled[0]
+        else:
+            first_l = first_r = (float(xs[0]), float(ys[0]))
         first_px, first_py, first_psi = xs[0], ys[0], yaws[0]
         start_back_dist = 5.0
         start_cx = first_px - start_back_dist * math.cos(first_psi)
@@ -1045,26 +1177,27 @@ class ProceduralTrackGenerator:
         wall_segments.append((start_back_l, start_back_r))
         wall_segments.append((start_back_r, first_r))
 
-        # Enclosing back wall behind Point B
-        last_l = l_sampled[-1]
-        last_r = r_sampled[-1]
-        last_px, last_py, last_psi = xs[-1], ys[-1], yaws[-1]
-        court_back_dist = 6.0
-        back_cx = last_px + court_back_dist * math.cos(last_psi)
-        back_cy = last_py + court_back_dist * math.sin(last_psi)
-        hw = math.hypot(last_l[0] - last_px, last_l[1] - last_py)
-        back_l = (
-            float(back_cx - hw * math.sin(last_psi)),
-            float(back_cy + hw * math.cos(last_psi)),
-        )
-        back_r = (
-            float(back_cx + hw * math.sin(last_psi)),
-            float(back_cy - hw * math.cos(last_psi)),
-        )
+        # Enclosing back wall behind Point B (skipped when a yard closes the track)
+        if not zones[-1].closes_track:
+            last_l = l_sampled[-1]
+            last_r = r_sampled[-1]
+            last_px, last_py, last_psi = xs[-1], ys[-1], yaws[-1]
+            court_back_dist = 6.0
+            back_cx = last_px + court_back_dist * math.cos(last_psi)
+            back_cy = last_py + court_back_dist * math.sin(last_psi)
+            hw = math.hypot(last_l[0] - last_px, last_l[1] - last_py)
+            back_l = (
+                float(back_cx - hw * math.sin(last_psi)),
+                float(back_cy + hw * math.cos(last_psi)),
+            )
+            back_r = (
+                float(back_cx + hw * math.sin(last_psi)),
+                float(back_cy - hw * math.cos(last_psi)),
+            )
 
-        wall_segments.append((last_l, back_l))
-        wall_segments.append((back_l, back_r))
-        wall_segments.append((back_r, last_r))
+            wall_segments.append((last_l, back_l))
+            wall_segments.append((back_l, back_r))
+            wall_segments.append((back_r, last_r))
 
         # Dynamic fair max episode calculation:
         # Distance = A -> B (total_length) + B -> A (total_length) + 15m buffer
@@ -1080,6 +1213,7 @@ class ProceduralTrackGenerator:
             waypoints_reverse=waypoints_reverse,
             wall_segments=wall_segments,
             obstacles=all_obstacles,
+            corridor_half_widths=corridor_half_widths,
             road_width=self.default_road_width,
             nominal_length=float(total_length),
             max_episode_steps=max_steps,
@@ -1087,24 +1221,33 @@ class ProceduralTrackGenerator:
         )
 
     def generate_estadio_ho_chi_min(self, seed: int | None = None) -> ProceduralTrack:
-        """Fixed site scenario: 100m road A->junction + left turn + 60x40m lot B + apron (1:1 meters)."""
+        """Fixed site scenario: road A -> left turn -> rectangular yard B (1:1 meters)."""
         seed_val = int(seed) if seed is not None else 42
         rng = np.random.default_rng(seed_val)
+        site = ESTADIO_SITE
 
         zones: list[TrackZone] = [
             StraightCorridorZone(
-                length=100.0, road_width=self.default_road_width, num_obstacles=2
+                length=site["road_length"],
+                road_width=site["road_width"],
+                num_obstacles=5,
+                num_dynamic_peds=2,
             ),
             TurnCorridorZone(
                 turn_angle_rad=math.pi / 2.0,
-                radius=8.0,
-                road_width=self.default_road_width,
+                radius=site["turn_radius"],
+                road_width=site["road_width"],
             ),
-            OpenPlazaZone(
-                length=60.0, yard_width=40.0, road_width=self.default_road_width
-            ),
-            TerminalCourtyardZone(
-                length=12.0, courtyard_width=18.0, road_width=self.default_road_width
+            RectangularYardZone(
+                length=site["yard_length"],
+                width=site["yard_width"],
+                road_width=site["road_width"],
+                entry_width=site["entry_width"],
+                entry_offset=site["entry_offset"],
+                yard_heading=None,
+                goal_margin=site["goal_margin"],
+                num_static_obstacles=5,
+                num_dynamic_peds=2,
             ),
         ]
         return self._build_track_from_zones(zones, seed_val, "estadio_ho_chi_min", rng)
@@ -1131,14 +1274,15 @@ class ProceduralTrackGenerator:
             StraightCorridorZone(
                 length=float(rng.uniform(20.0, 30.0)),
                 road_width=self.default_road_width,
-                num_obstacles=1,
+                num_obstacles=int(rng.integers(2, 4)),
+                num_dynamic_peds=int(rng.integers(1, 3)),
             )
         ]
         current_len += 25.0
 
         # Available intermediate zone types
         while current_len < (target_length - 20.0):
-            zone_choice = rng.choice(["turn", "plaza", "straight"])
+            zone_choice = rng.choice(["turn", "yard", "straight"])
             if zone_choice == "turn":
                 # -90 deg, +90 deg, or 45-60 deg turns
                 turn_deg = float(rng.choice([-90.0, 90.0, -60.0, 60.0, -45.0, 45.0]))
@@ -1152,33 +1296,34 @@ class ProceduralTrackGenerator:
                     )
                 )
                 current_len += abs(turn_rad) * r_turn
-            elif zone_choice == "plaza":
-                y_len = float(rng.uniform(30.0, 42.0))
-                y_w = float(rng.uniform(25.0, 34.0))
+            elif zone_choice == "yard":
+                y_len = float(rng.uniform(30.0, 45.0))
+                y_w = float(rng.uniform(25.0, 35.0))
                 zones.append(
-                    OpenPlazaZone(
-                        length=y_len, yard_width=y_w, road_width=self.default_road_width
+                    RectangularYardZone(
+                        length=y_len,
+                        width=y_w,
+                        road_width=self.default_road_width,
+                        entry_offset=0.0,
+                        yard_heading=None,
+                        num_static_obstacles=int(rng.integers(3, 6)),
+                        num_dynamic_peds=int(rng.integers(1, 3)),
                     )
                 )
                 current_len += y_len
+                break  # yard closes the track: terminal zone only
             else:
                 s_len = float(rng.uniform(20.0, 35.0))
                 zones.append(
                     StraightCorridorZone(
                         length=s_len,
                         road_width=self.default_road_width,
-                        num_obstacles=rng.integers(1, 3),
-                        has_dynamic_ped=bool(rng.random() > 0.5),
+                        num_obstacles=rng.integers(2, 5),
+                        num_dynamic_peds=int(rng.integers(1, 3)),
                     )
                 )
                 current_len += s_len
 
-        # Terminal courtyard
-        zones.append(
-            TerminalCourtyardZone(
-                length=14.0, courtyard_width=18.0, road_width=self.default_road_width
-            )
-        )
         return self._build_track_from_zones(zones, seed_val, "random", rng)
 
     def generate_track(

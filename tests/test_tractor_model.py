@@ -89,14 +89,16 @@ class TestTractorModelSDF(unittest.TestCase):
         self.assertIn("gz::sim::systems::JointStatePublisher", plugin_names)
 
     def test_chassis_collision_dimensions(self) -> None:
+        from src.translate.config import CAR_LENGTH, CAR_WIDTH, VEHICLE_SIZE_SCALE
+
         chassis = self.model.find("link[@name='chassis']")
         coll = chassis.find("collision[@name='chassis_body_collision']")
         self.assertIsNotNone(coll)
         size_str = coll.find("geometry/box/size").text
         sizes = [float(v) for v in size_str.split()]
-        self.assertAlmostEqual(sizes[0], 2.90, places=2)
-        self.assertAlmostEqual(sizes[1], 1.72, places=2)
-        self.assertAlmostEqual(sizes[2], 0.40, places=2)
+        self.assertAlmostEqual(sizes[0], CAR_LENGTH, places=2)
+        self.assertAlmostEqual(sizes[1], CAR_WIDTH, places=2)
+        self.assertAlmostEqual(sizes[2], 0.40 * VEHICLE_SIZE_SCALE, places=2)
 
         contact_sensor = chassis.find("sensor[@name='tractor_contact_sensor']")
         self.assertIsNotNone(contact_sensor)

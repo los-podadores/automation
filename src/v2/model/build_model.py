@@ -197,11 +197,30 @@ def add_gpu_lidar(
     element(range_el, "resolution", 0.02)
 
 
+def _scaled_geometry(g: dict, size_scale: float) -> dict:
+    """Apply a uniform rigid-body scale factor over CAD ground-truth dimensions."""
+    if size_scale == 1.0:
+        return g
+    scaled = dict(g)
+    for key in ("wheelbase_m", "beam_width_m", "beam_height_m", "beam_z_m"):
+        scaled[key] = float(g[key]) * size_scale
+    for end in ("rear", "front"):
+        axle = dict(g[end])
+        for key in ("wheel_radius_m", "wheel_width_m", "track_m", "axle_radius_m", "axle_length_m", "x_m", "z_m"):
+            axle[key] = float(axle[key]) * size_scale
+        scaled[end] = axle
+    return scaled
+
+
 def create_model(g: dict, p: dict) -> ET.Element:
     sdf = ET.Element("sdf", version="1.10")
     model = element(sdf, "model", name="tractor", canonical_link="chassis")
     element(model, "self_collide", "false")
     physics = p["physics"]
+    size_scale = float(p.get("vehicle", {}).get("size_scale", 1.0))
+    if not math.isfinite(size_scale) or size_scale <= 0:
+        raise ValueError(f"vehicle.size_scale must be finite and positive, got {size_scale}")
+    g = _scaled_geometry(g, size_scale)
 
     yellow = (0.85, 0.57, 0.09, 1)
     metal = (0.36, 0.39, 0.43, 1)
@@ -293,7 +312,7 @@ def create_model(g: dict, p: dict) -> ET.Element:
         )
 
     # Chassis Inertia and Structural Geometry
-    length = g["wheelbase_m"] + 0.22
+    length = g["wheelbase_m"] + 0.22 * size_scale
     width = g["rear"]["axle_length_m"]
     height = 0.25
     mass = physics["chassis_mass_kg"]
@@ -316,10 +335,10 @@ def create_model(g: dict, p: dict) -> ET.Element:
         yellow,
     )
 
-    # Chassis Body Collision Boundary
+    # Chassis Body Collision Boundary (uniform vehicle scale over CAD footprint)
     chassis_coll = element(chassis, "collision", name="chassis_body_collision")
-    element(chassis_coll, "pose", (0.0, 0, 0.55, 0, 0, 0))
-    box(chassis_coll, (2.90, 1.72, 0.40))
+    element(chassis_coll, "pose", (0.0, 0, 0.55 * size_scale, 0, 0, 0))
+    box(chassis_coll, (2.90 * size_scale, 1.72 * size_scale, 0.40 * size_scale))
     surf = element(chassis_coll, "surface")
     ode_fr = element(element(surf, "friction"), "ode")
     element(ode_fr, "mu", 1.0)

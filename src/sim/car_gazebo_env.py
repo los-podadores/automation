@@ -142,6 +142,21 @@ class CarGazeboEnv(gym.Env):
             return self.track.goal_pose
         return self.track.start_pose
 
+    def _nearest_corridor_half_width(self) -> float:
+        """Drivable half-width at the waypoint nearest the car (road or yard)."""
+        assert self.track is not None, "Track not generated"
+        waypoints = self._get_active_waypoints()
+        nearest_idx = int(
+            np.argmin(
+                np.hypot(
+                    waypoints[:, 0] - self.car_x, waypoints[:, 1] - self.car_y
+                )
+            )
+        )
+        if self.mission_phase == PHASE_A_TO_B:
+            return float(self.track.corridor_half_widths[nearest_idx])
+        return float(self.track.corridor_half_widths[len(waypoints) - 1 - nearest_idx])
+
     def _compute_goal_state(self) -> GoalState:
         waypoints = self._get_active_waypoints()
         gx, gy, _ = self._get_target_goal()
@@ -575,7 +590,7 @@ class CarGazeboEnv(gym.Env):
                 phase_bonus += 100.0
 
         # 7. Reward Formulation & Bounds Checking
-        half_road = self.road_width / 2.0
+        half_road = self._nearest_corridor_half_width()
         track_len = self.track.nominal_length if self.track is not None else self.track_length
         off_track = (
             abs(goal_state.cross_track_error) > (half_road + 2.0)
@@ -591,7 +606,7 @@ class CarGazeboEnv(gym.Env):
         )
         r_velocity = 0.5 * max(0.0, path_alignment)
 
-        # Centering penalty: quadratically scaled by road half-width
+        # Centering penalty: quadratically scaled by corridor half-width
         norm_cte = abs(goal_state.cross_track_error) / max(1.0, half_road)
         r_centering = -0.3 * (norm_cte**2)
 

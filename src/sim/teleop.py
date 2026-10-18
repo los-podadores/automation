@@ -30,11 +30,16 @@ from src.translate.config import (  # noqa: E402
     CAR_LENGTH,
     CAR_WIDTH,
     FRONT_LIDAR_X,
+    FRONT_TRACK_WIDTH,
+    FRONT_WHEEL_RADIUS,
     LIDAR_MAX_RANGE,
     LIDAR_NUM_RAYS,
     MAX_SPEED_MPS,
     MIN_SPEED_MPS,
     REAR_LIDAR_X,
+    REAR_TRACK_WIDTH,
+    REAR_WHEEL_RADIUS,
+    VEHICLE_SIZE_SCALE,
     WHEELBASE,
 )
 from src.translate.fusion_types import (  # noqa: E402
@@ -416,19 +421,19 @@ class CarTeleopApp:
                     tip_s = self.world_to_screen(tip_x, tip_y, car_x, car_y)
                     pygame.draw.line(self.screen, (255, 235, 60), op, tip_s, 3)
 
-        # 7. Draw Scaled Vehicle (3.8m length, 1.9m width, Ackermann wheels)
+        # 7. Draw Scaled Vehicle (CAR_LENGTH x CAR_WIDTH, Ackermann wheels)
         self._draw_vehicle(car_x, car_y, car_yaw, self.env.car_steer)
 
     def _draw_vehicle(
         self, car_x: float, car_y: float, car_yaw: float, steer: float
     ) -> None:
-        """Render the 3.8m car body and steerable front wheels."""
+        """Render the scaled car body and steerable front wheels."""
         cos_y = math.cos(car_yaw)
         sin_y = math.sin(car_yaw)
 
         # 4 corners of the car body in ego frame (+X forward, +Y left)
-        hl = CAR_LENGTH / 2.0  # 1.90m
-        hw = CAR_WIDTH / 2.0  # 0.95m
+        hl = CAR_LENGTH / 2.0
+        hw = CAR_WIDTH / 2.0
         corners = [
             (+hl, +hw),
             (+hl, -hw),
@@ -459,21 +464,20 @@ class CarTeleopApp:
             hood_pts.append(self.world_to_screen(wx, wy, car_x, car_y))
         pygame.draw.polygon(self.screen, CAR_CABIN_COLOR, hood_pts)
 
-        # Draw 4 Wheels
-        wheel_l = 0.76  # 2 * 0.38m radius
-        wheel_w = 0.28
-        axle_f = WHEELBASE / 2.0  # +1.25m
-        axle_r = -WHEELBASE / 2.0  # -1.25m
-        track_h = 0.80  # +/- 0.80m
+        # Draw 4 Wheels (scaled with vehicle: per-axle diameter x width)
+        axle_f = WHEELBASE / 2.0
+        axle_r = -WHEELBASE / 2.0
+        track_f = FRONT_TRACK_WIDTH / 2.0
+        track_r = REAR_TRACK_WIDTH / 2.0
 
         wheel_configs = [
-            (axle_f, +track_h, steer),  # Front Left (Steerable)
-            (axle_f, -track_h, steer),  # Front Right (Steerable)
-            (axle_r, +track_h, 0.0),  # Rear Left (Fixed)
-            (axle_r, -track_h, 0.0),  # Rear Right (Fixed)
+            (axle_f, +track_f, steer, 2.0 * FRONT_WHEEL_RADIUS, 0.16 * VEHICLE_SIZE_SCALE),  # Front Left (Steerable)
+            (axle_f, -track_f, steer, 2.0 * FRONT_WHEEL_RADIUS, 0.16 * VEHICLE_SIZE_SCALE),  # Front Right (Steerable)
+            (axle_r, +track_r, 0.0, 2.0 * REAR_WHEEL_RADIUS, 0.27 * VEHICLE_SIZE_SCALE),  # Rear Left (Fixed)
+            (axle_r, -track_r, 0.0, 2.0 * REAR_WHEEL_RADIUS, 0.27 * VEHICLE_SIZE_SCALE),  # Rear Right (Fixed)
         ]
 
-        for wx_ego, wy_ego, w_steer in wheel_configs:
+        for wx_ego, wy_ego, w_steer, wheel_l, wheel_w in wheel_configs:
             total_steer = car_yaw + w_steer
             cos_w = math.cos(total_steer)
             sin_w = math.sin(total_steer)
@@ -497,12 +501,14 @@ class CarTeleopApp:
             pygame.draw.polygon(self.screen, TIRE_COLOR, scr_w_pts)
             pygame.draw.polygon(self.screen, (80, 80, 90), scr_w_pts, 1)
 
-        # Draw Sensor Pod Indicators (Exact physical CAD mounting locations)
+        # Draw Sensor Pod Indicators (scaled physical mounting locations)
+        side_pod_x = WHEELBASE / 4.0
+        side_pod_y = CAR_WIDTH / 2.0 + 0.10 * VEHICLE_SIZE_SCALE
         pod_offsets = [
             (FRONT_LIDAR_X, 0.0, (50, 220, 100), "F"),   # Front bumper
             (REAR_LIDAR_X, 0.0, (220, 50, 50), "R"),    # Rear hitch
-            (+0.50, -0.70, (50, 180, 240), "R"), # Right flank
-            (+0.50, +0.70, (50, 180, 240), "L"), # Left flank
+            (side_pod_x, -side_pod_y, (50, 180, 240), "R"), # Right flank
+            (side_pod_x, side_pod_y, (50, 180, 240), "L"), # Left flank
         ]
         for px, py, col, _ in pod_offsets:
             p_wx = car_x + px * cos_y - py * sin_y

@@ -75,19 +75,20 @@ TRAIN_DEVICE: Final[str] = "0"  # GPU index, or "cpu"
 TRAIN_WORKERS: Final[int] = 8
 TRAIN_PATIENCE: Final[int] = 20  # early stopping patience
 
-# --- Autonomous Vehicle Dimensions & Kinematics (STEP CAD Ground Truth: TRACTOR.stp) ---
-WHEELBASE: Final[float] = 2.00  # Distance between front and rear axles (meters)
-REAR_TRACK_WIDTH: Final[float] = 1.40  # Lateral distance between rear wheels (meters)
-FRONT_TRACK_WIDTH: Final[float] = 1.29  # Lateral distance between front wheels (meters)
-TRACK_WIDTH: Final[float] = 1.40  # Dominant lateral track width (meters)
-REAR_WHEEL_RADIUS: Final[float] = 0.50  # Rear drive wheel radius (meters)
-FRONT_WHEEL_RADIUS: Final[float] = 0.37  # Front steering wheel radius (meters)
-WHEEL_RADIUS: Final[float] = 0.50  # Drive wheel radius for odometry (meters)
-CAR_LENGTH: Final[float] = 2.90  # Overall longitudinal footprint with wheels (meters)
-CAR_WIDTH: Final[float] = 1.72  # Overall lateral width with rear wheels and steering envelope (meters)
-CAR_HEIGHT: Final[float] = 1.25  # Overall height (meters)
+# --- Autonomous Vehicle Dimensions & Kinematics (STEP CAD Ground Truth: TRACTOR.stp, uniformly scaled) ---
+VEHICLE_SIZE_SCALE: Final[float] = 1.5  # Uniform rigid-body scale factor over CAD ground truth
+WHEELBASE: Final[float] = 2.00 * VEHICLE_SIZE_SCALE  # Distance between front and rear axles (meters)
+REAR_TRACK_WIDTH: Final[float] = 1.40 * VEHICLE_SIZE_SCALE  # Lateral distance between rear wheels (meters)
+FRONT_TRACK_WIDTH: Final[float] = 1.29 * VEHICLE_SIZE_SCALE  # Lateral distance between front wheels (meters)
+TRACK_WIDTH: Final[float] = 1.40 * VEHICLE_SIZE_SCALE  # Dominant lateral track width (meters)
+REAR_WHEEL_RADIUS: Final[float] = 0.50 * VEHICLE_SIZE_SCALE  # Rear drive wheel radius (meters)
+FRONT_WHEEL_RADIUS: Final[float] = 0.37 * VEHICLE_SIZE_SCALE  # Front steering wheel radius (meters)
+WHEEL_RADIUS: Final[float] = 0.50 * VEHICLE_SIZE_SCALE  # Drive wheel radius for odometry (meters)
+CAR_LENGTH: Final[float] = 2.90 * VEHICLE_SIZE_SCALE  # Overall longitudinal footprint with wheels (meters)
+CAR_WIDTH: Final[float] = 1.72 * VEHICLE_SIZE_SCALE  # Overall lateral width with rear wheels and steering envelope (meters)
+CAR_HEIGHT: Final[float] = 1.25 * VEHICLE_SIZE_SCALE  # Overall height (meters)
 VEHICLE_MASS_KG: Final[float] = 414.0  # Total vehicle mass (kg): 300 chassis + 2x35 rear + 2x20 front + 2x2 knuckle
-COLLISION_RADIUS: Final[float] = 1.15  # Bounding collision radius (meters)
+COLLISION_RADIUS: Final[float] = 1.15 * VEHICLE_SIZE_SCALE  # Bounding collision radius (meters)
 
 # Non-holonomic Ackermann Dynamic Limits
 MAX_STEER_RAD: Final[float] = 0.40  # ~23 degrees maximum front steering angle (joint limit)
@@ -113,17 +114,17 @@ MAX_OBSTACLE_HEIGHT: Final[float] = 2.0  # 2.0 m ceiling for vehicle obstacle en
 DITCH_NEGATIVE_THRESHOLD: Final[float] = -0.12  # -12 cm step drop for negative obstacles/holes
 MAX_TRAVERSABLE_SLOPE_RAD: Final[float] = 0.349066  # 20 degrees maximum terrain slope
 
-# --- Physical Directional 3D LiDAR Mounting Extrinsics (IRL Ground Truth) ---
-# Tractor chassis body length = 2.90m centered at x=0; bumpers at x=+1.45m and x=-1.45m
-FRONT_LIDAR_X: Final[float] = 1.45  # Front bumper leading face (meters ahead of vehicle center)
+# --- Physical Directional 3D LiDAR Mounting Extrinsics (scaled with vehicle) ---
+# Tractor chassis body length = CAR_LENGTH centered at x=0; bumpers at x=+/-CAR_LENGTH/2
+FRONT_LIDAR_X: Final[float] = CAR_LENGTH / 2.0  # Front bumper leading face (meters ahead of vehicle center)
 FRONT_LIDAR_Y: Final[float] = 0.00  # Centered laterally (meters)
-FRONT_LIDAR_Z: Final[float] = 0.60  # Front bumper mount height (meters above ground)
+FRONT_LIDAR_Z: Final[float] = 0.60 * VEHICLE_SIZE_SCALE  # Front bumper mount height (meters above ground)
 FRONT_LIDAR_PITCH_RAD: Final[float] = 0.349066  # ~20 degrees downward tilt
 FRONT_LIDAR_YAW_RAD: Final[float] = 0.00  # Forward facing
 
-REAR_LIDAR_X: Final[float] = -1.45  # Rear hitch/bumper trailing face (meters behind vehicle center)
+REAR_LIDAR_X: Final[float] = -CAR_LENGTH / 2.0  # Rear hitch/bumper trailing face (meters behind vehicle center)
 REAR_LIDAR_Y: Final[float] = 0.00  # Centered laterally (meters)
-REAR_LIDAR_Z: Final[float] = 0.60  # Rear bumper mount height (meters above ground)
+REAR_LIDAR_Z: Final[float] = 0.60 * VEHICLE_SIZE_SCALE  # Rear bumper mount height (meters above ground)
 REAR_LIDAR_PITCH_RAD: Final[float] = 0.349066  # ~20 degrees downward tilt
 REAR_LIDAR_YAW_RAD: Final[float] = 3.141592653589793  # 180 degrees (rear facing)
 
