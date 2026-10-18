@@ -112,7 +112,7 @@ async def run_worker_supervisor(
         "-o",
         "BatchMode=yes",
         f"{host.user}@{host.ip}",
-        f"wsl -d Ubuntu-24.04 -u root bash /mnt/c/{REMOTE_TEMP_SH[3:]}",
+        f"wsl -d Ubuntu-24.04 -u root bash /mnt/c/{REMOTE_TEMP_SH[3:]} {HEAD_ADDRESS}",
     ]
 
     while not stop_event.is_set():
