@@ -1022,6 +1022,27 @@ class ProceduralTrackGenerator:
         for i in range(len(r_sampled) - 1):
             wall_segments.append((r_sampled[i], r_sampled[i + 1]))
 
+        # Enclosing back wall behind Point A
+        first_l = l_sampled[0]
+        first_r = r_sampled[0]
+        first_px, first_py, first_psi = xs[0], ys[0], yaws[0]
+        start_back_dist = 5.0
+        start_cx = first_px - start_back_dist * math.cos(first_psi)
+        start_cy = first_py - start_back_dist * math.sin(first_psi)
+        start_hw = math.hypot(first_l[0] - first_px, first_l[1] - first_py)
+        start_back_l = (
+            float(start_cx - start_hw * math.sin(first_psi)),
+            float(start_cy + start_hw * math.cos(first_psi)),
+        )
+        start_back_r = (
+            float(start_cx + start_hw * math.sin(first_psi)),
+            float(start_cy - start_hw * math.cos(first_psi)),
+        )
+
+        wall_segments.append((first_l, start_back_l))
+        wall_segments.append((start_back_l, start_back_r))
+        wall_segments.append((start_back_r, first_r))
+
         # Enclosing back wall behind Point B
         last_l = l_sampled[-1]
         last_r = r_sampled[-1]

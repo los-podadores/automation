@@ -581,21 +581,58 @@ class CarGazeboEnv(gym.Env):
                 mission_completed = True
                 phase_bonus += 100.0
 
-        # 7. Reward Formulation
-        progress = (self.prev_dist_to_goal - curr_dist) * 4.0
+        # 7. Reward Formulation & Bounds Checking
+        half_road = self.road_width / 2.0
+        off_track = (
+            abs(goal_state.cross_track_error) > (half_road + 2.0)
+            or curr_dist > (self.track_length * 2.5)
+        )
+
+        # Progress reward: Euclidean delta towards goal + forward velocity alignment
+        dist_progress = (self.prev_dist_to_goal - curr_dist) * 5.0
         self.prev_dist_to_goal = curr_dist
 
-        # Penalize excessive cross-track deviation
-        r_centering = -0.15 * min(4.0, goal_state.cross_track_error**2)
-        # Smooth steering penalty
-        r_smooth = -0.04 * ((steer_cmd - self.last_steer_action) ** 2)
+        path_alignment = (self.car_vx / MAX_SPEED_MPS) * math.cos(
+            goal_state.path_heading_error
+        )
+        r_velocity = 0.5 * max(0.0, path_alignment)
 
-        reward = progress + r_centering + r_smooth + phase_bonus
+        # Centering penalty: quadratically scaled by road half-width
+        norm_cte = abs(goal_state.cross_track_error) / max(1.0, half_road)
+        r_centering = -0.3 * (norm_cte**2)
+
+        # Heading alignment penalty
+        r_heading = 0.2 * (math.cos(goal_state.path_heading_error) - 1.0)
+
+        # Reverse driving penalty in forward mission phase
+        r_reverse = (
+            -0.5 * abs(self.car_vx)
+            if (self.mission_phase == PHASE_A_TO_B and self.car_vx < -0.05)
+            else 0.0
+        )
+
+        # Action smoothness penalties
+        r_smooth = (
+            -0.05 * ((steer_cmd - self.last_steer_action) ** 2)
+            - 0.02 * ((throttle_cmd - self.last_throttle_action) ** 2)
+        )
+
+        reward = (
+            dist_progress
+            + r_velocity
+            + r_centering
+            + r_heading
+            + r_reverse
+            + r_smooth
+            + phase_bonus
+        )
 
         if collision:
             reward -= 100.0
+        elif off_track:
+            reward -= 100.0
 
-        terminated = collision or mission_completed
+        terminated = collision or off_track or mission_completed
         truncated = self.step_count >= self.max_episode_steps
 
         self.last_steer_action = steer_cmd
@@ -606,6 +643,7 @@ class CarGazeboEnv(gym.Env):
             "collision": collision,
             "wall_collision": wall_collision,
             "obstacle_collision": obstacle_collision,
+            "off_track": off_track,
             "reached_target": reached_target,
             "mission_completed": mission_completed,
             "phase": self.mission_phase,

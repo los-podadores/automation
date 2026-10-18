@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -177,6 +178,50 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
             self.assertAlmostEqual(odom["ay"], -0.3)
             self.assertAlmostEqual(odom["vx"], 1.8)
             self.assertAlmostEqual(odom["vy"], 0.05)
+
+    def test_track_is_fully_enclosed_at_both_ends(self) -> None:
+        """Verify that generated tracks have enclosing perimeter walls at both Point A and Point B."""
+        from src.sim.track_generator import ProceduralTrackGenerator
+
+        gen = ProceduralTrackGenerator()
+        track = gen.generate_demo_90deg(seed=42)
+
+        # There must be walls enclosing behind Point A (start) and Point B (goal)
+        ax, ay, _ = track.start_pose
+        bx, by, _ = track.goal_pose
+
+        # Find walls close to Point A
+        walls_near_a = [
+            seg
+            for seg in track.wall_segments
+            if math.hypot((seg[0][0] + seg[1][0]) / 2 - ax, (seg[0][1] + seg[1][1]) / 2 - ay) < 10.0
+        ]
+        self.assertGreaterEqual(len(walls_near_a), 3)
+
+        # Find walls close to Point B
+        walls_near_b = [
+            seg
+            for seg in track.wall_segments
+            if math.hypot((seg[0][0] + seg[1][0]) / 2 - bx, (seg[0][1] + seg[1][1]) / 2 - by) < 10.0
+        ]
+        self.assertGreaterEqual(len(walls_near_b), 3)
+
+    def test_off_track_termination(self) -> None:
+        """Verify that driving off the road triggers off_track termination with negative reward."""
+        from src.sim.car_gazebo_env import CarGazeboEnv
+
+        env = CarGazeboEnv(sim_mode="mock")
+        obs, info = env.reset(seed=42)
+
+        # Teleport car far off-track
+        env.car_x += 25.0
+        env.car_y += 25.0
+
+        obs, reward, terminated, truncated, info = env.step(np.array([0.0, 0.5], dtype=np.float32))
+        self.assertTrue(terminated)
+        self.assertTrue(info.get("off_track", False))
+        self.assertLessEqual(reward, -50.0)
+        env.close()
 
 
 if __name__ == "__main__":

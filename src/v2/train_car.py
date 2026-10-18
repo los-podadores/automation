@@ -88,6 +88,8 @@ def evaluate_and_record(
             status = "completed"
         elif info.get("collision"):
             status = "collision"
+        elif info.get("off_track"):
+            status = "off_track"
         elif truncated:
             status = "timeout"
         else:
@@ -172,6 +174,36 @@ def main() -> None:
         default=800,
         help="Maximum steps per evaluation episode (default: 800 = 40 seconds)",
     )
+    parser.add_argument(
+        "--num-learners",
+        type=int,
+        default=0,
+        help="Number of distributed Learner actors (0 for local, >=1 for DDP Ray actors)",
+    )
+    parser.add_argument(
+        "--gpus-per-learner",
+        type=float,
+        default=0.0,
+        help="Number of GPUs per Learner actor (e.g. 1.0 for Quadro P4000)",
+    )
+    parser.add_argument(
+        "--num-envs-per-runner",
+        type=int,
+        default=1,
+        help="Number of parallel vectorized environments per environment runner",
+    )
+    parser.add_argument(
+        "--train-batch-size",
+        type=int,
+        default=2000,
+        help="Total rollout batch size per PPO iteration",
+    )
+    parser.add_argument(
+        "--minibatch-size",
+        type=int,
+        default=256,
+        help="SGD/Adam minibatch size for GPU tensor updates",
+    )
     args = parser.parse_args()
 
     os.environ["TMPDIR"] = HEAD_TMPDIR
@@ -224,19 +256,29 @@ def main() -> None:
             num_runners = args.runners if args.runners is not None else 2
 
     register_env(ENV_NAME, env_creator)
-    print(f"[train] Configuring PPO with {num_runners} environment runners...")
+    print(
+        f"[train] Configuring PPO with {num_runners} environment runners (vectorization: {args.num_envs_per_runner} envs/runner)..."
+    )
+    if args.num_learners > 0:
+        print(
+            f"[train] Configuring LearnerGroup: {args.num_learners} DDP learner(s) with {args.gpus_per_learner} GPU(s) each."
+        )
 
     config = (
         PPOConfig()
+        .api_stack(
+            enable_rl_module_and_learner=True,
+            enable_env_runner_and_connector_v2=True,
+        )
         .environment(
             ENV_NAME,
             env_config={"sim_mode": args.sim_mode, "num_obstacles": 6},
         )
         .framework("torch")
         .training(
-            train_batch_size=1000,
-            minibatch_size=128,
-            num_epochs=3,
+            train_batch_size=args.train_batch_size,
+            minibatch_size=args.minibatch_size,
+            num_epochs=4,
             lr=3e-4,
             gamma=0.99,
             lambda_=0.95,
@@ -244,11 +286,16 @@ def main() -> None:
             vf_loss_coeff=0.5,
             entropy_coeff=0.01,
         )
+        .learners(
+            num_learners=args.num_learners,
+            num_gpus_per_learner=args.gpus_per_learner,
+            num_cpus_per_learner=1 if args.num_learners > 0 else 0,
+        )
         .env_runners(
             num_env_runners=num_runners,
+            num_envs_per_env_runner=args.num_envs_per_runner,
             rollout_fragment_length="auto",
         )
-        .resources(num_gpus=0)
     )
 
     algo = config.build_algo()
