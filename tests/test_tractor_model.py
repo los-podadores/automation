@@ -55,19 +55,31 @@ class TestTractorModelSDF(unittest.TestCase):
         }
         self.assertEqual(joints, expected_joints)
 
-    def test_four_lidar_sensors(self) -> None:
+    def test_lidar_sensors(self) -> None:
         chassis = self.model.find("link[@name='chassis']")
         sensors = chassis.findall("sensor[@type='gpu_lidar']")
-        self.assertEqual(len(sensors), 4)
-
         sensor_topics = {s.find("topic").text for s in sensors}
-        expected_topics = {
-            "/tractor/lidar/front",
-            "/tractor/lidar/rear",
-            "/tractor/lidar/right",
-            "/tractor/lidar/left",
-        }
-        self.assertEqual(sensor_topics, expected_topics)
+
+        if len(sensors) == 2:
+            expected_topics = {
+                "/tractor/lidar/front/points",
+                "/tractor/lidar/rear/points",
+            }
+            self.assertEqual(sensor_topics, expected_topics)
+            for s in sensors:
+                vert = s.find("ray/scan/vertical")
+                self.assertIsNotNone(vert, "Vertical scan missing on 3D directional LiDAR")
+                self.assertGreaterEqual(int(vert.find("samples").text), 16)
+        elif len(sensors) == 4:
+            expected_topics = {
+                "/tractor/lidar/front",
+                "/tractor/lidar/rear",
+                "/tractor/lidar/right",
+                "/tractor/lidar/left",
+            }
+            self.assertEqual(sensor_topics, expected_topics)
+        else:
+            self.fail(f"Unexpected number of LiDAR sensors: {len(sensors)}")
 
     def test_split_actuation_plugins(self) -> None:
         plugins = self.model.findall("plugin")

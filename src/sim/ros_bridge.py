@@ -16,7 +16,15 @@ from typing import Any
 import numpy as np
 
 from src.sim.spatial_map import LaserScanData
-from src.translate.config import WHEELBASE
+from src.translate.config import (
+    FRONT_LIDAR_PITCH_RAD,
+    FRONT_LIDAR_X,
+    FRONT_LIDAR_Z,
+    REAR_LIDAR_PITCH_RAD,
+    REAR_LIDAR_X,
+    REAR_LIDAR_Z,
+    WHEELBASE,
+)
 
 
 import sys
@@ -36,7 +44,7 @@ class Ros2GazeboBridge:
             import rclpy
             from geometry_msgs.msg import Twist
             from nav_msgs.msg import Odometry
-            from sensor_msgs.msg import Imu, JointState, LaserScan
+            from sensor_msgs.msg import Imu, JointState, LaserScan, PointCloud2
             from std_msgs.msg import Float64
         except ImportError as exc:
             raise RuntimeError(
@@ -49,6 +57,7 @@ class Ros2GazeboBridge:
         self.Twist = Twist
         self.Odometry = Odometry
         self.LaserScan = LaserScan
+        self.PointCloud2 = PointCloud2
         self.Float64 = Float64
         self.JointState = JointState
         self.Imu = Imu
@@ -68,6 +77,7 @@ class Ros2GazeboBridge:
 
         # Cached state from Gazebo
         self.latest_scans: dict[str, LaserScanData] = {}
+        self.latest_point_clouds: dict[str, np.ndarray] = {}
         self.latest_odom: dict[str, float] | None = None
         self.latest_steering_angle: float = 0.0
         self.latest_imu: dict[str, float] | None = None
@@ -78,7 +88,7 @@ class Ros2GazeboBridge:
         self._last_vx_time: float = 0.0
         self._ax: float = 0.0
 
-        # Subscriptions: 4 LiDAR Pods
+        # Subscriptions: 4 LiDAR Pods (LaserScan)
         self.sub_front = self.node.create_subscription(
             LaserScan, "/tractor/lidar/front", lambda m: self._on_scan("front", m), 10
         )
@@ -90,6 +100,20 @@ class Ros2GazeboBridge:
         )
         self.sub_left = self.node.create_subscription(
             LaserScan, "/tractor/lidar/left", lambda m: self._on_scan("left", m), 10
+        )
+
+        # Subscriptions: 3D Directional LiDARs (PointCloud2)
+        self.sub_cloud_front = self.node.create_subscription(
+            PointCloud2,
+            "/tractor/lidar/front/points",
+            lambda m: self._on_point_cloud("front", m),
+            10,
+        )
+        self.sub_cloud_rear = self.node.create_subscription(
+            PointCloud2,
+            "/tractor/lidar/rear/points",
+            lambda m: self._on_point_cloud("rear", m),
+            10,
         )
 
         # Subscription: World Odometry & Wheel Odometry
@@ -152,6 +176,64 @@ class Ros2GazeboBridge:
         with self.lock:
             self.latest_scans[pod_name] = scan_data
             self.last_scan_time = time.monotonic()
+
+    @staticmethod
+    def _parse_point_cloud2(msg: Any) -> np.ndarray:
+        if not hasattr(msg, "data") or len(msg.data) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+
+        offsets = {f.name: f.offset for f in getattr(msg, "fields", [])}
+        if "x" in offsets and "y" in offsets and "z" in offsets:
+            x_off = offsets["x"]
+            y_off = offsets["y"]
+            z_off = offsets["z"]
+            step = getattr(msg, "point_step", 16)
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, step)
+            xs = np.frombuffer(
+                np.ascontiguousarray(raw[:, x_off : x_off + 4]), dtype=np.float32
+            )
+            ys = np.frombuffer(
+                np.ascontiguousarray(raw[:, y_off : y_off + 4]), dtype=np.float32
+            )
+            zs = np.frombuffer(
+                np.ascontiguousarray(raw[:, z_off : z_off + 4]), dtype=np.float32
+            )
+            valid = np.isfinite(xs) & np.isfinite(ys) & np.isfinite(zs)
+            if np.any(valid):
+                return np.column_stack([xs[valid], ys[valid], zs[valid]]).astype(
+                    np.float32
+                )
+        return np.empty((0, 3), dtype=np.float32)
+
+    def _on_point_cloud(self, pod_name: str, msg: Any) -> None:
+        pts = self._parse_point_cloud2(msg)
+        if pts.shape[0] == 0:
+            return
+
+        # Transform sensor local coordinates to vehicle base_link ego frame
+        if pod_name == "front":
+            c_p = math.cos(FRONT_LIDAR_PITCH_RAD)
+            s_p = math.sin(FRONT_LIDAR_PITCH_RAD)
+            xe = pts[:, 0] * c_p + pts[:, 2] * s_p + FRONT_LIDAR_X
+            ye = pts[:, 1]
+            ze = -pts[:, 0] * s_p + pts[:, 2] * c_p + FRONT_LIDAR_Z
+        else:
+            c_p = math.cos(REAR_LIDAR_PITCH_RAD)
+            s_p = math.sin(REAR_LIDAR_PITCH_RAD)
+            xe = -pts[:, 0] * c_p - pts[:, 2] * s_p + REAR_LIDAR_X
+            ye = -pts[:, 1]
+            ze = -pts[:, 0] * s_p + pts[:, 2] * c_p + REAR_LIDAR_Z
+
+        pts_ego = np.column_stack([xe, ye, ze]).astype(np.float32)
+
+        with self.lock:
+            self.latest_point_clouds[pod_name] = pts_ego
+            self.last_scan_time = time.monotonic()
+
+    def get_point_clouds(self) -> dict[str, np.ndarray]:
+        """Thread-safe snapshot of latest 3D point clouds in vehicle ego coordinates."""
+        with self.lock:
+            return dict(self.latest_point_clouds)
 
     def _parse_odom(self, msg: Any) -> None:
         pos = msg.pose.pose.position

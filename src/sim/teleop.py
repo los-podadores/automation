@@ -28,10 +28,12 @@ from src.sim.car_gazebo_env import (  # noqa: E402
 from src.translate.config import (  # noqa: E402
     CAR_LENGTH,
     CAR_WIDTH,
+    FRONT_LIDAR_X,
     LIDAR_MAX_RANGE,
     LIDAR_NUM_RAYS,
     MAX_SPEED_MPS,
     MIN_SPEED_MPS,
+    REAR_LIDAR_X,
     WHEELBASE,
 )
 from src.translate.fusion_types import (  # noqa: E402
@@ -494,10 +496,10 @@ class CarTeleopApp:
             pygame.draw.polygon(self.screen, TIRE_COLOR, scr_w_pts)
             pygame.draw.polygon(self.screen, (80, 80, 90), scr_w_pts, 1)
 
-        # Draw 4 Sensor Pod Indicators (Exact physical CAD mounting locations)
+        # Draw Sensor Pod Indicators (Exact physical CAD mounting locations)
         pod_offsets = [
-            (+1.05, 0.0, (50, 220, 100), "F"),   # Front bumper
-            (-1.05, 0.0, (220, 50, 50), "R"),    # Rear hitch
+            (FRONT_LIDAR_X, 0.0, (50, 220, 100), "F"),   # Front bumper
+            (REAR_LIDAR_X, 0.0, (220, 50, 50), "R"),    # Rear hitch
             (+0.50, -0.70, (50, 180, 240), "R"), # Right flank
             (+0.50, +0.70, (50, 180, 240), "L"), # Left flank
         ]

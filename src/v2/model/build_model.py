@@ -13,7 +13,10 @@ import xml.dom.minidom
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from geometry import extract_geometry
+try:
+    from .geometry import extract_geometry
+except ImportError:
+    from geometry import extract_geometry
 
 ROOT = Path(__file__).resolve().parent
 
@@ -165,6 +168,9 @@ def add_gpu_lidar(
     min_range: float = 0.15,
     max_range: float = 25.0,
     update_rate: int = 20,
+    vertical_samples: int = 1,
+    vertical_min_angle: float = 0.0,
+    vertical_max_angle: float = 0.0,
 ) -> None:
     sensor = element(parent, "sensor", name=name, type="gpu_lidar")
     element(sensor, "pose", pose)
@@ -179,6 +185,12 @@ def add_gpu_lidar(
     element(horizontal, "resolution", 1)
     element(horizontal, "min_angle", min_angle)
     element(horizontal, "max_angle", max_angle)
+    if vertical_samples > 1:
+        vertical = element(scan, "vertical")
+        element(vertical, "samples", vertical_samples)
+        element(vertical, "resolution", 1)
+        element(vertical, "min_angle", vertical_min_angle)
+        element(vertical, "max_angle", vertical_max_angle)
     range_el = element(ray, "range")
     element(range_el, "min", min_range)
     element(range_el, "max", max_range)
@@ -198,50 +210,87 @@ def create_model(g: dict, p: dict) -> ET.Element:
 
     chassis = element(model, "link", name="chassis")
 
-    # ================= 4 Distributed LiDAR Pods =================
-    # Pod 0: Front-Center (0 deg, 120 deg FOV, 180 samples)
-    add_gpu_lidar(
-        chassis,
-        name="lidar_front",
-        pose=(g["front"]["x_m"] + 0.05, 0.0, g["beam_z_m"] + 0.15, 0, 0, 0),
-        topic="/tractor/lidar/front",
-        samples=180,
-        min_angle=-1.047198,
-        max_angle=1.047198,
-    )
+    # ================= LiDAR Sensor Configuration =================
+    lidar_cfg = p.get("lidar", {})
+    layout = lidar_cfg.get("layout", "dual_directional_3d")
 
-    # Pod 1: Rear-Center (180 deg, 120 deg FOV, 180 samples)
-    add_gpu_lidar(
-        chassis,
-        name="lidar_rear",
-        pose=(g["rear"]["x_m"] - 0.05, 0.0, g["beam_z_m"] + 0.15, 0, 0, math.pi),
-        topic="/tractor/lidar/rear",
-        samples=180,
-        min_angle=-1.047198,
-        max_angle=1.047198,
-    )
+    if layout == "dual_directional_3d":
+        pitch_down = float(lidar_cfg.get("pitch_down_rad", 0.349066))
+        v_samples = int(lidar_cfg.get("vertical_samples", 16))
+        v_min = float(lidar_cfg.get("vertical_min_rad", -0.436332))
+        v_max = float(lidar_cfg.get("vertical_max_rad", 0.261799))
+        front_x = float(lidar_cfg.get("front_x_m", 1.45))
+        front_y = float(lidar_cfg.get("front_y_m", 0.00))
+        front_z = float(lidar_cfg.get("front_z_m", 0.60))
+        rear_x = float(lidar_cfg.get("rear_x_m", -1.45))
+        rear_y = float(lidar_cfg.get("rear_y_m", 0.00))
+        rear_z = float(lidar_cfg.get("rear_z_m", 0.60))
 
-    # Pod 2: Front-Right (-90 deg, 100 deg FOV, 150 samples)
-    add_gpu_lidar(
-        chassis,
-        name="lidar_right",
-        pose=(0.50, -g["rear"]["track_m"] / 2.0, g["beam_z_m"] + 0.20, 0, 0, -math.pi / 2.0),
-        topic="/tractor/lidar/right",
-        samples=150,
-        min_angle=-0.872665,
-        max_angle=0.872665,
-    )
+        # Pod 0: Front Directional 3D LiDAR (mounted on front bumper, tilted down towards ground)
+        add_gpu_lidar(
+            chassis,
+            name="lidar_front",
+            pose=(front_x, front_y, front_z, 0, pitch_down, 0),
+            topic="/tractor/lidar/front/points",
+            samples=180,
+            min_angle=-1.047198,
+            max_angle=1.047198,
+            vertical_samples=v_samples,
+            vertical_min_angle=v_min,
+            vertical_max_angle=v_max,
+        )
 
-    # Pod 3: Front-Left (+90 deg, 100 deg FOV, 150 samples)
-    add_gpu_lidar(
-        chassis,
-        name="lidar_left",
-        pose=(0.50, g["rear"]["track_m"] / 2.0, g["beam_z_m"] + 0.20, 0, 0, math.pi / 2.0),
-        topic="/tractor/lidar/left",
-        samples=150,
-        min_angle=-0.872665,
-        max_angle=0.872665,
-    )
+        # Pod 1: Rear Directional 3D LiDAR (mounted on rear bumper/hitch, tilted down towards ground)
+        add_gpu_lidar(
+            chassis,
+            name="lidar_rear",
+            pose=(rear_x, rear_y, rear_z, 0, pitch_down, math.pi),
+            topic="/tractor/lidar/rear/points",
+            samples=180,
+            min_angle=-1.047198,
+            max_angle=1.047198,
+            vertical_samples=v_samples,
+            vertical_min_angle=v_min,
+            vertical_max_angle=v_max,
+        )
+    else:
+        # Fallback: 4 Distributed LiDAR Pods (Horizontal)
+        add_gpu_lidar(
+            chassis,
+            name="lidar_front",
+            pose=(g["front"]["x_m"] + 0.05, 0.0, g["beam_z_m"] + 0.15, 0, 0, 0),
+            topic="/tractor/lidar/front",
+            samples=180,
+            min_angle=-1.047198,
+            max_angle=1.047198,
+        )
+        add_gpu_lidar(
+            chassis,
+            name="lidar_rear",
+            pose=(g["rear"]["x_m"] - 0.05, 0.0, g["beam_z_m"] + 0.15, 0, 0, math.pi),
+            topic="/tractor/lidar/rear",
+            samples=180,
+            min_angle=-1.047198,
+            max_angle=1.047198,
+        )
+        add_gpu_lidar(
+            chassis,
+            name="lidar_right",
+            pose=(0.50, -g["rear"]["track_m"] / 2.0, g["beam_z_m"] + 0.20, 0, 0, -math.pi / 2.0),
+            topic="/tractor/lidar/right",
+            samples=150,
+            min_angle=-0.872665,
+            max_angle=0.872665,
+        )
+        add_gpu_lidar(
+            chassis,
+            name="lidar_left",
+            pose=(0.50, g["rear"]["track_m"] / 2.0, g["beam_z_m"] + 0.20, 0, 0, math.pi / 2.0),
+            topic="/tractor/lidar/left",
+            samples=150,
+            min_angle=-0.872665,
+            max_angle=0.872665,
+        )
 
     # Chassis Inertia and Structural Geometry
     length = g["wheelbase_m"] + 0.22
@@ -429,14 +478,24 @@ def write_xml(path: Path, root: ET.Element) -> None:
 
 def load_parameters() -> dict:
     p = tomllib.loads((ROOT / "parameters.toml").read_text(encoding="utf-8"))
-    for section in p.values():
-        for key, value in section.items():
-            if (
-                not isinstance(value, (float, int))
-                or not math.isfinite(value)
-                or value <= 0
-            ):
-                raise ValueError(f"{key} must be finite and positive")
+    for sec_name, section in p.items():
+        if sec_name in ("physics", "control"):
+            for key, value in section.items():
+                if (
+                    not isinstance(value, (float, int))
+                    or not math.isfinite(value)
+                    or value <= 0
+                ):
+                    raise ValueError(f"{key} must be finite and positive")
+        elif sec_name == "lidar":
+            layout = section.get("layout", "dual_directional_3d")
+            if layout not in ("dual_directional_3d", "surround_4pod_2d"):
+                raise ValueError(f"Unknown lidar layout: {layout}")
+            for key, value in section.items():
+                if key != "layout" and (
+                    not isinstance(value, (float, int)) or not math.isfinite(value)
+                ):
+                    raise ValueError(f"{key} must be finite numeric")
     return p
 
 

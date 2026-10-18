@@ -8,7 +8,13 @@ from typing import Any, Final
 
 import numpy as np
 
-from src.translate.config import LIDAR_FOV_RAD, LIDAR_MAX_RANGE, LIDAR_NUM_RAYS
+from src.translate.config import (
+    FRONT_LIDAR_X,
+    LIDAR_FOV_RAD,
+    LIDAR_MAX_RANGE,
+    LIDAR_NUM_RAYS,
+    REAR_LIDAR_X,
+)
 from src.translate.fusion_types import (
     CLASS_FREE,
     CLASS_STATIC_HAZARD,
@@ -23,15 +29,15 @@ ANGULAR_RESOLUTION: Final[float] = RAY_FOV_RAD / NUM_RAYS
 
 
 POD_CONFIGS: Final[dict[str, tuple[float, float, float]]] = {
-    "front": (1.05, 0.0, 0.0),
-    "rear": (-1.05, 0.0, math.pi),
+    "front": (FRONT_LIDAR_X, 0.0, 0.0),
+    "rear": (REAR_LIDAR_X, 0.0, math.pi),
     "right": (0.50, -0.70, -math.pi / 2.0),
     "left": (0.50, 0.70, math.pi / 2.0),
 }
 
 POD_SPECS: Final[dict[str, dict[str, float | int]]] = {
     "front": {
-        "x": 1.05,
+        "x": FRONT_LIDAR_X,
         "y": 0.0,
         "yaw": 0.0,
         "samples": 180,
@@ -39,7 +45,7 @@ POD_SPECS: Final[dict[str, dict[str, float | int]]] = {
         "angle_max": 1.047198,
     },
     "rear": {
-        "x": -1.05,
+        "x": REAR_LIDAR_X,
         "y": 0.0,
         "yaw": math.pi,
         "samples": 180,
@@ -169,6 +175,65 @@ class SpatialMapBuilder:
                                 hit_cls = float(obs.to_spatial_code())
                                 break
                     classes[b_idx] = hit_cls
+
+        norm_distances = np.clip(distances / self.max_range, 0.0, 1.0)
+        return norm_distances, classes
+
+    def fuse_point_cloud_obstacles(
+        self,
+        obstacle_points: np.ndarray | None,
+        negative_hazards: np.ndarray | None = None,
+        obstacles: list[TrackedObstacle] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Project segmented 3D non-ground obstacle points into 360-degree polar range and classification grid.
+
+        Args:
+            obstacle_points: (N, 3) or (N, 2) Cartesian hit coordinates in vehicle ego frame.
+            negative_hazards: Optional (M, 3) or (M, 2) drop-off / ditch coordinates in ego frame.
+            obstacles: Optional list of tracked obstacles for semantic classification.
+
+        Returns:
+            distances: (72,) normalized float array in [0.0, 1.0].
+            classes: (72,) float array of spatial class codes.
+        """
+        distances = np.full(self.num_rays, self.max_range, dtype=np.float32)
+        classes = np.full(self.num_rays, CLASS_FREE, dtype=np.float32)
+
+        all_obs_pts: list[np.ndarray] = []
+        if obstacle_points is not None and obstacle_points.size > 0:
+            all_obs_pts.append(obstacle_points[:, :2])
+        if negative_hazards is not None and negative_hazards.size > 0:
+            all_obs_pts.append(negative_hazards[:, :2])
+
+        if len(all_obs_pts) > 0:
+            pts = np.vstack(all_obs_pts)
+            x_ego = pts[:, 0]
+            y_ego = pts[:, 1]
+            d_ego = np.hypot(x_ego, y_ego)
+            valid_mask = (d_ego >= 0.15) & (d_ego <= self.max_range)
+
+            if np.any(valid_mask):
+                d_val = d_ego[valid_mask]
+                xe_val = x_ego[valid_mask]
+                ye_val = y_ego[valid_mask]
+                phi_ego = np.arctan2(ye_val, xe_val)
+                bin_indices = (
+                    np.floor((phi_ego + math.pi) / ANGULAR_RESOLUTION).astype(int)
+                    % self.num_rays
+                )
+
+                for b_idx, d, xe, ye in zip(bin_indices, d_val, xe_val, ye_val):
+                    if d < distances[b_idx]:
+                        distances[b_idx] = d
+                        hit_cls = float(CLASS_STATIC_HAZARD)
+                        if obstacles:
+                            for obs in obstacles:
+                                if math.hypot(xe - obs.rel_x, ye - obs.rel_y) <= (
+                                    obs.radius + 0.35
+                                ):
+                                    hit_cls = float(obs.to_spatial_code())
+                                    break
+                        classes[b_idx] = hit_cls
 
         norm_distances = np.clip(distances / self.max_range, 0.0, 1.0)
         return norm_distances, classes
@@ -421,6 +486,8 @@ class SpatialMapBuilder:
         obstacles: list[TrackedObstacle] | None = None,
         wall_segments_ego: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
         pod_scans: dict[str, LaserScanData] | None = None,
+        obstacle_points: np.ndarray | None = None,
+        negative_hazards: np.ndarray | None = None,
     ) -> np.ndarray:
         """Assemble the complete 156-float observation vector for RLlib.
 
@@ -433,7 +500,13 @@ class SpatialMapBuilder:
         k_arr = kinematics.to_array()
         g_arr = goal_state.to_array()
 
-        if pod_scans is not None and len(pod_scans) > 0:
+        if obstacle_points is not None and obstacle_points.size > 0:
+            dist_arr, cls_arr = self.fuse_point_cloud_obstacles(
+                obstacle_points=obstacle_points,
+                negative_hazards=negative_hazards,
+                obstacles=obstacles,
+            )
+        elif pod_scans is not None and len(pod_scans) > 0:
             dist_arr, cls_arr = self.fuse_pod_scans(pod_scans, obstacles=obstacles)
         elif wall_segments_ego is not None:
             mock_scans = self.generate_mock_pod_scans(

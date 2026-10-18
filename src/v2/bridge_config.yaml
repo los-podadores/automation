@@ -1,5 +1,17 @@
 # ros_gz_bridge configuration for Los Podadores Tractor
-# Bridges 4-pod LiDAR array, Actuator controls, and Odometry between Gazebo Harmonic and ROS 2 Jazzy
+# Bridges 3D Directional LiDARs, 4-pod array, Actuator controls, and Odometry between Gazebo Harmonic and ROS 2 Jazzy
+
+- ros_topic_name: "/tractor/lidar/front/points"
+  gz_topic_name: "/tractor/lidar/front/points"
+  ros_type_name: "sensor_msgs/msg/PointCloud2"
+  gz_type_name: "gz.msgs.PointCloudPacked"
+  direction: "GZ_TO_ROS"
+
+- ros_topic_name: "/tractor/lidar/rear/points"
+  gz_topic_name: "/tractor/lidar/rear/points"
+  ros_type_name: "sensor_msgs/msg/PointCloud2"
+  gz_type_name: "gz.msgs.PointCloudPacked"
+  direction: "GZ_TO_ROS"
 
 - ros_topic_name: "/tractor/lidar/front"
   gz_topic_name: "/tractor/lidar/front"

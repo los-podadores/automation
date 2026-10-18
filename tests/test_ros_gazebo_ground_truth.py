@@ -258,6 +258,37 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         self.assertGreater(env.car_x, initial_x)
         env.close()
 
+    def test_ros_bridge_point_cloud_processing(self) -> None:
+        """Verify Ros2GazeboBridge processes 3D PointCloud2 messages and transforms them to ego frame."""
+        from src.sim.ros_bridge import Ros2GazeboBridge
+
+        with patch("threading.Thread"):
+            bridge = Ros2GazeboBridge(node_name="test_cloud_bridge")
+
+            # Create mock PointCloud2 message
+            mock_cloud = MagicMock()
+            f_x = MagicMock(offset=0)
+            f_x.name = "x"
+            f_y = MagicMock(offset=4)
+            f_y.name = "y"
+            f_z = MagicMock(offset=8)
+            f_z.name = "z"
+            mock_cloud.fields = [f_x, f_y, f_z]
+            mock_cloud.point_step = 16
+
+            # Point at (2.0, 0.5, 0.1) in sensor frame
+            raw_floats = np.array([2.0, 0.5, 0.1, 0.0], dtype=np.float32)
+            mock_cloud.data = raw_floats.tobytes()
+
+            bridge._on_point_cloud("front", mock_cloud)
+            clouds = bridge.get_point_clouds()
+
+            self.assertIn("front", clouds)
+            front_pts = clouds["front"]
+            from src.translate.config import FRONT_LIDAR_X
+            # x_ego should be > FRONT_LIDAR_X because sensor is at front bumper pointing forward
+            self.assertGreater(front_pts[0, 0], FRONT_LIDAR_X)
+
 
 if __name__ == "__main__":
     unittest.main()

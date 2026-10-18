@@ -7,6 +7,7 @@ import unittest
 import numpy as np
 
 from src.sim.spatial_map import EgoKinematics, LaserScanData, SpatialMapBuilder
+from src.translate.config import FRONT_LIDAR_X
 from src.translate.fusion_types import GoalState
 
 
@@ -22,9 +23,9 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         np.testing.assert_allclose(classes, 0.0)
 
     def test_front_pod_obstacle_detection(self) -> None:
-        # Create a scan from the front pod (at x=1.05m, y=0.0m)
+        # Create a scan from the front pod (at x=FRONT_LIDAR_X, y=0.0m)
         # Target at 3.0m in front along pod boresight (0 rad)
-        # Ego coordinate of hit: x = 1.05 + 3.0 = 4.05m, y = 0.0m, azimuth = 0 rad
+        # Ego coordinate of hit: x = FRONT_LIDAR_X + 3.0, y = 0.0m, azimuth = 0 rad
         # Boresight angle is in ray bin near index 36 (since -pi is index 0, 0 rad is index 36)
         samples = 180
         ranges = np.full(samples, 15.0, dtype=np.float32)
@@ -42,7 +43,7 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
 
         # Ray bin for azimuth 0 rad
         zero_bin = int(math.floor((0.0 + math.pi) / (2.0 * math.pi / 72))) % 72
-        expected_norm_dist = 4.05 / 15.0
+        expected_norm_dist = (FRONT_LIDAR_X + 3.0) / 15.0
 
         self.assertAlmostEqual(distances[zero_bin], expected_norm_dist, places=2)
         self.assertGreater(classes[zero_bin], 0.0)
@@ -123,7 +124,7 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         self.assertEqual(pts.shape, (samples, 2))
         # Center sample should be at x ~ 4.05, y ~ 0.0
         center_pt = pts[samples // 2]
-        self.assertAlmostEqual(center_pt[0], 4.05, places=2)
+        self.assertAlmostEqual(center_pt[0], FRONT_LIDAR_X + 3.0, places=2)
         self.assertAlmostEqual(center_pt[1], 0.0, places=2)
 
     def test_semantic_obstacle_tagging_in_pod_fusion(self) -> None:
@@ -131,7 +132,7 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
 
         samples = 180
         ranges = np.full(samples, 15.0, dtype=np.float32)
-        ranges[samples // 2] = 3.0  # Hit at ego x=4.05m, y=0.0m
+        ranges[samples // 2] = 3.0  # Hit at ego x = FRONT_LIDAR_X + 3.0m, y=0.0m
         pod_scans = {
             "front": LaserScanData(
                 ranges=ranges,
@@ -143,7 +144,7 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         ped = TrackedObstacle(
             class_id=CLASS_PEDESTRIAN,
             class_name="person",
-            rel_x=4.05,
+            rel_x=FRONT_LIDAR_X + 3.0,
             rel_y=0.0,
             rel_vx=0.0,
             rel_vy=0.0,
@@ -161,7 +162,7 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
 
         samples = 180
         ranges = np.full(samples, 15.0, dtype=np.float32)
-        ranges[samples // 2] = 2.0  # Hit 2m ahead of front pod at x=1.05 -> ego x=3.05, y=0.0
+        ranges[samples // 2] = 2.0  # Hit 2m ahead of front pod
         pod_scans = {
             "front": LaserScanData(
                 ranges=ranges,
@@ -173,7 +174,7 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         ped = TrackedObstacle(
             class_id=CLASS_PEDESTRIAN,
             class_name="person",
-            rel_x=3.05,
+            rel_x=FRONT_LIDAR_X + 2.0,
             rel_y=0.0,
             rel_vx=0.0,
             rel_vy=0.0,
@@ -184,13 +185,13 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         self.assertEqual(len(beam_data), 1)
         pod = beam_data[0]
         self.assertEqual(pod["pod_name"], "front")
-        self.assertEqual(pod["origin_ego"], (1.05, 0.0))
+        self.assertEqual(pod["origin_ego"], (FRONT_LIDAR_X, 0.0))
         self.assertEqual(len(pod["endpoints_ego"]), samples)
 
         center_idx = samples // 2
         self.assertTrue(pod["is_hit"][center_idx])
         self.assertEqual(pod["classes"][center_idx], CLASS_PEDESTRIAN)
-        self.assertAlmostEqual(pod["endpoints_ego"][center_idx][0], 3.05, places=2)
+        self.assertAlmostEqual(pod["endpoints_ego"][center_idx][0], FRONT_LIDAR_X + 2.0, places=2)
         self.assertAlmostEqual(pod["endpoints_ego"][center_idx][1], 0.0, places=2)
 
     def test_generate_mock_pod_scans(self) -> None:
@@ -202,10 +203,44 @@ class TestSpatialMapLaserFusion(unittest.TestCase):
         self.assertIn("right", mock_scans)
         self.assertIn("left", mock_scans)
 
-        # Front pod is at x=1.05m facing forward -> distance to x=5.0 wall is 5.0 - 1.05 = 3.95m
+        # Front pod is at x=FRONT_LIDAR_X facing forward -> distance to x=5.0 wall is 5.0 - FRONT_LIDAR_X
         front_scan = mock_scans["front"]
         center_sample = front_scan.ranges[len(front_scan.ranges) // 2]
-        self.assertAlmostEqual(center_sample, 3.95, places=2)
+        self.assertAlmostEqual(center_sample, 5.0 - FRONT_LIDAR_X, places=2)
+
+    def test_fuse_point_cloud_obstacles(self) -> None:
+        """Verify that 3D obstacle points project accurately into 72-bin polar range grid."""
+        # Single obstacle at x=3.0m, y=0.0m (azimuth 0, bin 36)
+        obs_pts = np.array([[3.0, 0.0, 0.2]], dtype=np.float32)
+        distances, classes = self.builder.fuse_point_cloud_obstacles(obs_pts)
+
+        self.assertEqual(len(distances), 72)
+        self.assertEqual(len(classes), 72)
+
+        zero_bin = int(math.floor((0.0 + math.pi) / (2.0 * math.pi / 72))) % 72
+        self.assertAlmostEqual(distances[zero_bin], 3.0 / 15.0, places=3)
+        self.assertGreater(classes[zero_bin], 0.0)
+
+    def test_build_observation_with_point_cloud_obstacles(self) -> None:
+        """Verify build_observation produces valid 156-dim vector when given point cloud obstacles."""
+        kinematics = EgoKinematics(vx=1.0, vy=0.0, steering_angle=0.0, yaw_rate=0.0, ax=0.0, ay=0.0)
+        goal_state = GoalState(dx_ego=5.0, dy_ego=0.0, distance=5.0, heading_error=0.0, cross_track_error=0.0, path_heading_error=0.0, phase=0)
+
+        obs_pts = np.array([[2.5, 0.0, 0.15]], dtype=np.float32)
+        obs = self.builder.build_observation(
+            kinematics=kinematics,
+            goal_state=goal_state,
+            obstacle_points=obs_pts,
+        )
+
+        self.assertEqual(obs.shape, (156,))
+        # Check kinematics and goal in slices
+        np.testing.assert_allclose(obs[0:6], kinematics.to_array())
+        np.testing.assert_allclose(obs[6:12], goal_state.to_array())
+
+        zero_bin = int(math.floor((0.0 + math.pi) / (2.0 * math.pi / 72))) % 72
+        dist_slice = obs[12:84]
+        self.assertAlmostEqual(dist_slice[zero_bin], 2.5 / 15.0, places=3)
 
 
 if __name__ == "__main__":

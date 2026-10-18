@@ -102,3 +102,28 @@ LIDAR_MAX_RANGE: Final[float] = 15.0  # Max LiDAR range in meters (near/mid-fiel
 LIDAR_NUM_RAYS: Final[int] = 72  # 72 radial rays covering full 360-degree perimeter (5 deg res)
 LIDAR_FOV_RAD: Final[float] = 6.283185307179586  # 2 * pi (full 360-degree surround)
 
+# --- Dual Directional 3D LiDAR & Ground Segmentation ---
+LIDAR_DIRECTIONAL_PITCH_RAD: Final[float] = 0.349066  # ~20 degrees downward tilt
+LIDAR_VERTICAL_SAMPLES: Final[int] = 16  # 16-channel vertical resolution
+LIDAR_VERTICAL_MIN_RAD: Final[float] = -0.436332  # -25 degrees (ground plane sweep)
+LIDAR_VERTICAL_MAX_RAD: Final[float] = 0.261799  # +15 degrees (obstacle sweep)
+GROUND_EPSILON_METERS: Final[float] = 0.05  # 5 cm ground plane boundary
+SMALL_OBSTACLE_MIN_HEIGHT: Final[float] = 0.06  # 6 cm minimum protrusion for animal/curb
+MAX_OBSTACLE_HEIGHT: Final[float] = 2.0  # 2.0 m ceiling for vehicle obstacle envelope
+DITCH_NEGATIVE_THRESHOLD: Final[float] = -0.12  # -12 cm step drop for negative obstacles/holes
+MAX_TRAVERSABLE_SLOPE_RAD: Final[float] = 0.349066  # 20 degrees maximum terrain slope
+
+# --- Physical Directional 3D LiDAR Mounting Extrinsics (IRL Ground Truth) ---
+# Tractor chassis body length = 2.90m centered at x=0; bumpers at x=+1.45m and x=-1.45m
+FRONT_LIDAR_X: Final[float] = 1.45  # Front bumper leading face (meters ahead of vehicle center)
+FRONT_LIDAR_Y: Final[float] = 0.00  # Centered laterally (meters)
+FRONT_LIDAR_Z: Final[float] = 0.60  # Front bumper mount height (meters above ground)
+FRONT_LIDAR_PITCH_RAD: Final[float] = 0.349066  # ~20 degrees downward tilt
+FRONT_LIDAR_YAW_RAD: Final[float] = 0.00  # Forward facing
+
+REAR_LIDAR_X: Final[float] = -1.45  # Rear hitch/bumper trailing face (meters behind vehicle center)
+REAR_LIDAR_Y: Final[float] = 0.00  # Centered laterally (meters)
+REAR_LIDAR_Z: Final[float] = 0.60  # Rear bumper mount height (meters above ground)
+REAR_LIDAR_PITCH_RAD: Final[float] = 0.349066  # ~20 degrees downward tilt
+REAR_LIDAR_YAW_RAD: Final[float] = 3.141592653589793  # 180 degrees (rear facing)
+
