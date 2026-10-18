@@ -1,12 +1,15 @@
-"""Simulation environment, mock perception, and teleoperation package."""
+"""Gazebo-truth simulation environment and teleoperation package."""
 
 
 import numpy  # noqa: F401
 
 from .car_gazebo_env import CarGazeboEnv  # noqa: E402
-from .mock_perception import MockPerceptionEngine, SimulatedEntity  # noqa: E402
 from .spatial_map import EgoKinematics, SpatialMapBuilder  # noqa: E402
-from .track_generator import ProceduralTrack, ProceduralTrackGenerator  # noqa: E402
+from .track_generator import (  # noqa: E402
+    ProceduralTrack,
+    ProceduralTrackGenerator,
+    SimulatedEntity,
+)
 
 
 def __getattr__(name: str) -> object:
@@ -21,7 +24,6 @@ __all__ = [
     "CarGazeboEnv",
     "CarTeleopApp",
     "EgoKinematics",
-    "MockPerceptionEngine",
     "ProceduralTrack",
     "ProceduralTrackGenerator",
     "SimulatedEntity",

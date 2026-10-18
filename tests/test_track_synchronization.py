@@ -6,14 +6,12 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
 from src.sim.car_gazebo_env import CarGazeboEnv
 from src.sim.track_generator import ProceduralTrackGenerator
-from src.translate.config import CAR_LENGTH, CAR_WIDTH, COLLISION_RADIUS
-
-
 class TestTrackSynchronization(unittest.TestCase):
     def setUp(self) -> None:
         self.gen = ProceduralTrackGenerator(default_road_width=7.0)
@@ -44,15 +42,27 @@ class TestTrackSynchronization(unittest.TestCase):
             json_path = Path(tmpdir) / "procedural_track.json"
             self.track.export_json(json_path)
 
-            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
-            env.track_path = json_path
-            obs, info = env.reset(options={"track": self.track})
+            with patch("src.sim.ros_bridge.Ros2GazeboBridge") as bridge_cls:
+                mock_bridge = MagicMock()
+                bridge_cls.return_value = mock_bridge
+                mock_bridge.has_world_odom = True
+                mock_bridge.get_state.return_value = (
+                    None,
+                    {
+                        "front": np.zeros((4, 3), dtype=np.float32),
+                        "rear": np.zeros((3, 3), dtype=np.float32),
+                    },
+                )
+                env = CarGazeboEnv(track_path=json_path)
+                with patch("time.sleep"):
+                    obs, info = env.reset(options={"track": self.track})
 
             self.assertEqual(env.track.seed, self.track.seed)
             self.assertAlmostEqual(env.car_x, self.track.start_pose[0])
             self.assertAlmostEqual(env.car_y, self.track.start_pose[1])
             self.assertAlmostEqual(env.car_yaw, self.track.start_pose[2])
             self.assertEqual(obs.shape, (156,))
+            self.assertEqual(info["lidar_source"], "ros_gz_3d")
 
     def test_instant_throttle_cut(self) -> None:
         """Verify that when no throttle key is active, throttle action drops to zero immediately."""
@@ -151,80 +161,3 @@ class TestTrackSynchronization(unittest.TestCase):
         self.assertIn("/model/tractor/imu", content)
         self.assertIn("sensor_msgs/msg/Imu", content)
 
-    def test_multi_circle_wall_collision_detection(self) -> None:
-        """Verify multi-circle collision check catches corner overlaps that single circle misses."""
-        track = self.gen.generate_estadio_ho_chi_min(seed=42)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            json_path = Path(tmpdir) / "track.json"
-            track.export_json(json_path)
-            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
-            env.reset(options={"track": track})
-
-            # Position car near a wall where center is beyond COLLISION_RADIUS but front bumper hits.
-            # Road width is 7.0m, wall is at y = 3.5m. Front reach at 60 deg yaw:
-            # car_y + (CAR_LENGTH/2) * sin(60) + (CAR_WIDTH/2) * cos(60).
-            front_reach = (CAR_LENGTH / 2.0) * math.sin(math.radians(60.0)) + (
-                CAR_WIDTH / 2.0
-            ) * math.cos(math.radians(60.0))
-            env.car_x = 10.0
-            env.car_y = 3.5 - front_reach + 0.1
-            env.car_yaw = math.radians(60.0)
-
-            self.assertGreater(3.5 - env.car_y, COLLISION_RADIUS)
-            self.assertTrue(env._check_wall_collision())
-
-    def test_parallel_wall_collision_at_physical_envelope(self) -> None:
-        """Verify tractor side collision triggers exactly at physical contact."""
-        track = self.gen.generate_estadio_ho_chi_min(seed=42)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            json_path = Path(tmpdir) / "track.json"
-            track.export_json(json_path)
-            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
-            env.reset(options={"track": track})
-
-            # Road width is 7.0m, straight segment has left wall at y = +3.5m.
-            # Physical wall surface is at 3.50 - 0.15 = 3.35m; contact when the
-            # car envelope (CAR_WIDTH/2) reaches it plus the 0.02m margin.
-            half_car = CAR_WIDTH / 2.0
-            contact_y = 3.35 - half_car
-            env.car_x = 10.0
-            env.car_yaw = 0.0
-
-            # Safe in center of road
-            env.car_y = 0.0
-            self.assertFalse(env._check_wall_collision())
-
-            # Touching the wall surface (envelope edge within r_eff of the wall box)
-            env.car_y = contact_y + 0.01
-            self.assertTrue(env._check_wall_collision())
-
-            # Grinding into the wall
-            env.car_y = contact_y + 0.11
-            self.assertTrue(env._check_wall_collision())
-
-    def test_obstacle_collision_at_physical_envelope(self) -> None:
-        """Verify obstacle collision triggers when vehicle bounding box contacts obstacle perimeter."""
-        track = self.gen.generate_estadio_ho_chi_min(seed=42)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            json_path = Path(tmpdir) / "track.json"
-            track.export_json(json_path)
-            env = CarGazeboEnv(sim_mode="mock", track_path=json_path)
-            env.reset(options={"track": track})
-
-            # Place car at origin heading along +X
-            env.car_x = 10.0
-            env.car_y = 0.0
-            env.car_yaw = 0.0
-
-            # Front bumper is at x = 10.0 + CAR_LENGTH/2; obstacle of radius
-            # 0.50m touches it (minus the 0.02m contact margin).
-            obs = track.obstacles[0]
-            obs.world_x = 10.0 + CAR_LENGTH / 2.0 + 0.50 - 0.01
-            obs.world_y = 0.0
-            obs.radius = 0.50
-
-            action = np.array([0.0, 0.0], dtype=np.float32)
-            _, _, terminated, _, info = env.step(action)
-            self.assertTrue(info["obstacle_collision"])
-            self.assertTrue(info["collision"])
-            self.assertTrue(terminated)

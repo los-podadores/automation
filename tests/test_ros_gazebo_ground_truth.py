@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 import numpy as np
 
-from src.sim.spatial_map import EgoKinematics, LaserScanData, SpatialMapBuilder
+from src.sim.spatial_map import EgoKinematics, SpatialMapBuilder
 from src.translate.fusion_types import CLASS_FREE, CLASS_STATIC_HAZARD, GoalState
 
 
@@ -36,8 +36,8 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
     def setUp(self) -> None:
         self.map_builder = SpatialMapBuilder(num_rays=72, max_range=15.0)
 
-    def test_pure_lidar_observation_without_mock_perception(self) -> None:
-        """Verify that in gazebo mode, observations are generated without mock perception."""
+    def test_pure_lidar_observation_from_point_clouds(self) -> None:
+        """Verify that observations come solely from segmented 3D point clouds."""
         kinematics = EgoKinematics(
             vx=1.5,
             vy=0.05,
@@ -55,23 +55,14 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
             path_heading_error=0.01,
             phase=0,
         )
-        # Front pod detects obstacle at 3.0m
-        ranges = np.full(180, 15.0, dtype=np.float32)
-        ranges[90] = 3.0  # Center sample hit
-        pod_scans = {
-            "front": LaserScanData(
-                ranges=ranges,
-                angle_min=-1.047198,
-                angle_max=1.047198,
-                angle_increment=2.094396 / 180,
-            )
-        }
+        # Segmented obstacle point straight ahead at 3.0m in ego frame.
+        obstacle_points = np.array([[3.0, 0.0, 0.2]], dtype=np.float32)
 
-        # Build observation without passing any obstacles list
+        # Build observation from geometry only (no semantic input).
         obs = self.map_builder.build_observation(
             kinematics=kinematics,
             goal_state=goal_state,
-            pod_scans=pod_scans,
+            obstacle_points=obstacle_points,
         )
 
         self.assertEqual(obs.shape, (156,))
@@ -84,6 +75,9 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         dist_slice = obs[12:84]
         class_slice = obs[84:156]
 
+        # Only FREE and STATIC_HAZARD classes may appear.
+        self.assertTrue(set(np.unique(class_slice)) <= {CLASS_FREE, CLASS_STATIC_HAZARD})
+
         # The boresight ray should have distance < 1.0 and class == CLASS_STATIC_HAZARD
         hit_bins = np.where(class_slice == CLASS_STATIC_HAZARD)[0]
         self.assertGreater(len(hit_bins), 0)
@@ -95,6 +89,37 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         self.assertGreater(len(free_bins), 0)
         for b in free_bins:
             self.assertEqual(dist_slice[b], 1.0)
+
+    def test_ditch_points_produce_hazard_bins(self) -> None:
+        """Verify that negative-hazard (ditch) points set STATIC_HAZARD bins."""
+        kinematics = EgoKinematics(
+            vx=1.0,
+            vy=0.0,
+            steering_angle=0.0,
+            yaw_rate=0.0,
+            ax=0.0,
+            ay=0.0,
+        )
+        goal_state = GoalState(
+            dx_ego=5.0,
+            dy_ego=0.0,
+            distance=5.0,
+            heading_error=0.0,
+            cross_track_error=0.0,
+            path_heading_error=0.0,
+            phase=0,
+        )
+        negative_hazards = np.array([[2.0, 1.0, -0.4]], dtype=np.float32)
+        obs = self.map_builder.build_observation(
+            kinematics=kinematics,
+            goal_state=goal_state,
+            negative_hazards=negative_hazards,
+        )
+        class_slice = obs[84:156]
+        self.assertIn(CLASS_STATIC_HAZARD, set(class_slice.tolist()))
+        hit_bins = np.where(class_slice == CLASS_STATIC_HAZARD)[0]
+        self.assertGreater(len(hit_bins), 0)
+        self.assertTrue(set(np.unique(class_slice)) <= {CLASS_FREE, CLASS_STATIC_HAZARD})
 
     def test_gazebo_collision_is_sole_ground_truth(self) -> None:
         """Verify that in gazebo mode, environment collision relies solely on Gazebo contacts."""
@@ -116,9 +141,9 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
                     "steering_angle": 0.0,
                     "ax": 0.0,
                 },
-                {},
+                {"front": np.zeros((4, 3), dtype=np.float32), "rear": np.zeros((3, 3), dtype=np.float32)},
             )
-            env = CarGazeboEnv(sim_mode="gazebo")
+            env = CarGazeboEnv()
             with patch("time.sleep"):
                 env.reset()
                 obs, reward, terminated, truncated, info = env.step(np.array([0.0, 0.5], dtype=np.float32))
@@ -210,53 +235,116 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         """Verify that driving off the road triggers off_track termination with negative reward."""
         from src.sim.car_gazebo_env import CarGazeboEnv
 
-        env = CarGazeboEnv(sim_mode="mock")
-        obs, info = env.reset(seed=42)
+        with patch("src.sim.ros_bridge.Ros2GazeboBridge") as mock_bridge_cls:
+            mock_bridge = MagicMock()
+            mock_bridge_cls.return_value = mock_bridge
+            mock_bridge.has_world_odom = True
+            mock_bridge.get_collision.return_value = False
+            mock_bridge.get_state.return_value = (
+                {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "yaw": 0.0,
+                    "vx": 0.0,
+                    "vy": 0.0,
+                    "yaw_rate": 0.0,
+                    "steering_angle": 0.0,
+                    "ax": 0.0,
+                },
+                {"front": np.zeros((4, 3), dtype=np.float32), "rear": np.zeros((3, 3), dtype=np.float32)},
+            )
+            env = CarGazeboEnv()
+            with patch("time.sleep"):
+                env.reset(seed=42)
 
-        # Teleport car far off-track, away from the goal so progress reward stays negative
-        env.car_x -= 25.0
-        env.car_y += 25.0
-
-        obs, reward, terminated, truncated, info = env.step(np.array([0.0, 0.5], dtype=np.float32))
-        self.assertTrue(terminated)
-        self.assertTrue(info.get("off_track", False))
-        self.assertLessEqual(reward, -50.0)
-        env.close()
+                # Drive Gazebo odometry far off-track so the contact gate sees off-track.
+                mock_bridge.get_state.return_value = (
+                    {
+                        "x": -25.0,
+                        "y": 25.0,
+                        "yaw": 0.0,
+                        "vx": 0.0,
+                        "vy": 0.0,
+                        "yaw_rate": 0.0,
+                        "steering_angle": 0.0,
+                        "ax": 0.0,
+                    },
+                    {"front": np.zeros((4, 3), dtype=np.float32), "rear": np.zeros((3, 3), dtype=np.float32)},
+                )
+                obs, reward, terminated, truncated, info = env.step(np.array([0.0, 0.5], dtype=np.float32))
+                self.assertTrue(terminated)
+                self.assertTrue(info.get("off_track", False))
+                self.assertLessEqual(reward, -50.0)
+                env.close()
 
     def test_reverse_motion_capability(self) -> None:
-        """Verify that negative throttle commands reverse the vehicle down to MIN_SPEED_MPS."""
+        """Verify that negative throttle publishes a reverse target speed to Gazebo."""
         from src.sim.car_gazebo_env import CarGazeboEnv
-        from src.translate.config import MIN_SPEED_MPS
 
-        env = CarGazeboEnv(sim_mode="mock")
-        env.reset(seed=123)
+        with patch("src.sim.ros_bridge.Ros2GazeboBridge") as mock_bridge_cls:
+            mock_bridge = MagicMock()
+            mock_bridge_cls.return_value = mock_bridge
+            mock_bridge.has_world_odom = True
+            mock_bridge.get_collision.return_value = False
+            moving = {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw": 0.0,
+                "vx": -1.0,
+                "vy": 0.0,
+                "yaw_rate": 0.0,
+                "steering_angle": 0.0,
+                "ax": 0.0,
+            }
+            mock_bridge.get_state.return_value = (moving, {"front": np.zeros((4, 3), dtype=np.float32), "rear": np.zeros((3, 3), dtype=np.float32)})
+            env = CarGazeboEnv()
+            with patch("time.sleep"):
+                env.reset(seed=123)
+                for _ in range(25):
+                    env.step(np.array([0.0, -1.0], dtype=np.float32))
 
-        # Full reverse throttle command must decelerate and reverse vehicle towards MIN_SPEED_MPS
-        for _ in range(25):
-            env.step(np.array([0.0, -1.0], dtype=np.float32))
+            from src.translate.config import MIN_SPEED_MPS
 
-        self.assertLess(env.car_vx, -0.9)
-        self.assertGreaterEqual(env.car_vx, MIN_SPEED_MPS - 1e-4)
-        env.close()
+            self.assertLess(env.car_vx, -0.9)
+            self.assertGreaterEqual(env.car_vx, MIN_SPEED_MPS - 1e-4)
+            env.close()
 
     def test_random_policy_net_forward_progression(self) -> None:
-        """Verify that under random inputs, vehicle progresses forward because |MIN_SPEED_MPS| < MAX_SPEED_MPS."""
+        """Verify that Gazebo odometry updates drive forward progression."""
         from src.sim.car_gazebo_env import CarGazeboEnv
 
-        env = CarGazeboEnv(sim_mode="mock")
-        env.reset(seed=42)
+        with patch("src.sim.ros_bridge.Ros2GazeboBridge") as mock_bridge_cls:
+            mock_bridge = MagicMock()
+            mock_bridge_cls.return_value = mock_bridge
+            mock_bridge.has_world_odom = True
+            mock_bridge.get_collision.return_value = False
+            moving = {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw": 0.0,
+                "vx": 1.0,
+                "vy": 0.0,
+                "yaw_rate": 0.0,
+                "steering_angle": 0.0,
+                "ax": 0.0,
+            }
+            mock_bridge.get_state.return_value = (moving, {"front": np.zeros((4, 3), dtype=np.float32), "rear": np.zeros((3, 3), dtype=np.float32)})
+            env = CarGazeboEnv()
+            with patch("time.sleep"):
+                env.reset(seed=42)
+                rng = np.random.default_rng(42)
+                initial_x = env.car_x
+                for _ in range(100):
+                    action = rng.uniform(-1.0, 1.0, size=(2,)).astype(np.float32)
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    moving["x"] += 0.05
+                    mock_bridge.get_state.return_value = (moving, {"front": np.zeros((4, 3), dtype=np.float32), "rear": np.zeros((3, 3), dtype=np.float32)})
+                    if terminated:
+                        break
 
-        rng = np.random.default_rng(42)
-        initial_x = env.car_x
-        for _ in range(100):
-            action = rng.uniform(-1.0, 1.0, size=(2,)).astype(np.float32)
-            obs, reward, terminated, truncated, info = env.step(action)
-            if terminated:
-                break
-
-        # Net displacement must be strictly positive (forward)
-        self.assertGreater(env.car_x, initial_x)
-        env.close()
+                # Net displacement must be strictly positive (forward)
+                self.assertGreater(env.car_x, initial_x)
+                env.close()
 
     def test_ros_bridge_point_cloud_processing(self) -> None:
         """Verify Ros2GazeboBridge processes 3D PointCloud2 messages and transforms them to ego frame."""

@@ -33,11 +33,7 @@ from src.translate.config import (  # noqa: E402
     VEHICLE_SIZE_SCALE,
     WHEELBASE,
 )
-from src.translate.fusion_types import (  # noqa: E402
-    CLASS_FREE,
-    CLASS_PEDESTRIAN,
-    CLASS_VEHICLE,
-)
+from src.translate.fusion_types import CLASS_FREE  # noqa: E402
 
 # Colors
 BG_COLOR: Final[tuple[int, int, int]] = (18, 22, 28)
@@ -163,27 +159,15 @@ class CarEnvRenderer:
                     pygame.draw.circle(self.surface, c, op, r_px)
                     pygame.draw.circle(self.surface, TEXT_WHITE, op, r_px, 1)
 
-        # 6. Physical 4-Pod LiDAR Beams
+        # 6. Segmented 3D LiDAR Cloud (front+rear, viz only)
         cos_y = math.cos(car_yaw)
         sin_y = math.sin(car_yaw)
-        pod_beams = env.latest_raw_pod_beams
-        for pod in pod_beams:
-            x_pod, y_pod = pod["origin_ego"]
-            orig_wx = car_x + x_pod * cos_y - y_pod * sin_y
-            orig_wy = car_y + x_pod * sin_y + y_pod * cos_y
-            orig_s = self.world_to_screen(orig_wx, orig_wy, car_x, car_y)
-            for (xe, ye), h_cls, hit in zip(
-                pod["endpoints_ego"][::3], pod["classes"][::3], pod["is_hit"][::3]
-            ):
-                end_wx = car_x + xe * cos_y - ye * sin_y
-                end_wy = car_y + xe * sin_y + ye * cos_y
-                end_s = self.world_to_screen(end_wx, end_wy, car_x, car_y)
-                if hit:
-                    col = OBS_VEHICLE_COLOR if h_cls == CLASS_VEHICLE else WALL_COLOR
-                    pygame.draw.line(self.surface, col, orig_s, end_s, 1)
-                    pygame.draw.circle(self.surface, col, end_s, 2)
-                else:
-                    pygame.draw.line(self.surface, (22, 38, 30), orig_s, end_s, 1)
+        raw_pts = env.latest_raw_lidar_points_ego
+        for xe, ye in np.asarray(raw_pts).reshape(-1, 2):
+            end_wx = car_x + xe * cos_y - ye * sin_y
+            end_wy = car_y + xe * sin_y + ye * cos_y
+            end_s = self.world_to_screen(end_wx, end_wy, car_x, car_y)
+            pygame.draw.circle(self.surface, WALL_COLOR, end_s, 2)
 
         # 7. Scaled Ackermann Vehicle
         self._draw_vehicle(env, car_x, car_y, car_yaw)

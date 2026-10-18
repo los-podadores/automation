@@ -62,8 +62,8 @@ class TestTractorModelSDF(unittest.TestCase):
 
         if len(sensors) == 2:
             expected_topics = {
-                "/tractor/lidar/front/points",
-                "/tractor/lidar/rear/points",
+                "/tractor/lidar/front",
+                "/tractor/lidar/rear",
             }
             self.assertEqual(sensor_topics, expected_topics)
             for s in sensors:

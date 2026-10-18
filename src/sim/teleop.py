@@ -7,7 +7,6 @@ worlds to 3D Gazebo Harmonic.
 
 from __future__ import annotations
 
-import argparse
 import math
 import sys
 from pathlib import Path
@@ -25,7 +24,6 @@ import pygame  # noqa: E402
 from src.sim.car_gazebo_env import (  # noqa: E402
     CarGazeboEnv,
 )
-from src.sim.track_generator import DEFAULT_PRESET, PRESETS  # noqa: E402
 from src.translate.config import (  # noqa: E402
     CAR_LENGTH,
     CAR_WIDTH,
@@ -42,11 +40,7 @@ from src.translate.config import (  # noqa: E402
     VEHICLE_SIZE_SCALE,
     WHEELBASE,
 )
-from src.translate.fusion_types import (  # noqa: E402
-    CLASS_FREE,
-    CLASS_PEDESTRIAN,
-    CLASS_VEHICLE,
-)
+from src.translate.fusion_types import CLASS_FREE  # noqa: E402
 
 # Window Configuration
 WINDOW_W: Final[int] = 1280
@@ -56,7 +50,6 @@ PANEL_W: Final[int] = 400
 FPS: Final[int] = 30
 
 # LiDAR Display Modes
-LIDAR_MODE_PHYSICAL_BEAMS: Final[str] = "physical"
 LIDAR_MODE_POLICY_GRID: Final[str] = "policy"
 LIDAR_MODE_POINT_CLOUD: Final[str] = "point_cloud"
 
@@ -93,39 +86,28 @@ PIXELS_PER_METER: Final[float] = 14.0  # 1 meter = 14 pixels
 class CarTeleopApp:
     """Interactive GUI application for controlling the autonomous car in 3D simulation."""
 
-    def __init__(self, backend: str = "sim", preset: str = DEFAULT_PRESET) -> None:
+    def __init__(self) -> None:
         pygame.init()
         pygame.display.set_caption("Los Podadores — Ackermann Car Teleop & 360° LiDAR")
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.clock = pygame.time.Clock()
-        self.backend = backend
-        self.preset = preset
 
         self.font_title = pygame.font.SysFont("monospace", 17, bold=True)
         self.font_body = pygame.font.SysFont("monospace", 13)
         self.font_small = pygame.font.SysFont("monospace", 11)
 
-        sim_mode = "gazebo" if self.backend == "gazebo" else "mock"
-        self.env = CarGazeboEnv(
-            sim_mode=sim_mode,
-            num_obstacles=4,
-            road_width=7.0,
-            allow_reverse=True,
-        )
-        reset_opts = {"preset": self.preset} if self.backend == "sim" else None
-        self.obs, self.info = self.env.reset(options=reset_opts)
+        self.env = CarGazeboEnv(allow_reverse=True)
+        self.obs, self.info = self.env.reset()
 
         self.steer_action: float = 0.0
         self.throttle_action: float = 0.0
         self.paused: bool = False
-        self.lidar_render_mode: str = LIDAR_MODE_PHYSICAL_BEAMS
+        self.lidar_render_mode: str = LIDAR_MODE_POLICY_GRID
         self.total_reward: float = 0.0
         self.trail: list[tuple[float, float]] = []
         self.collision_flash_timer: int = 0
-        if self.backend == "gazebo":
-            self.status_msg = f"Gazebo 3D | Preset: {self.preset}"
-        else:
-            self.status_msg = f"Initialized ({self.preset}). Drive with WASD / Arrows."
+        preset_name = self.env.track.preset_name if self.env.track else "custom"
+        self.status_msg = f"Gazebo 3D | Preset: {preset_name}"
         self.status_timer: int = 75
 
     def world_to_screen(
@@ -147,41 +129,22 @@ class CarTeleopApp:
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     return False
                 if event.key == pygame.K_l:
-                    if self.lidar_render_mode == LIDAR_MODE_PHYSICAL_BEAMS:
+                    if self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
+                        self.lidar_render_mode = LIDAR_MODE_POINT_CLOUD
+                        mode_str = "3D LIDAR Cloud (Front+Rear)"
+                    else:
                         self.lidar_render_mode = LIDAR_MODE_POLICY_GRID
                         mode_str = "RL Policy Bins (72-Ray Centered Grid)"
-                    elif self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
-                        self.lidar_render_mode = LIDAR_MODE_POINT_CLOUD
-                        mode_str = "Contact Point Cloud (Hits Only)"
-                    else:
-                        self.lidar_render_mode = LIDAR_MODE_PHYSICAL_BEAMS
-                        mode_str = "Physical LiDAR Beams (4 Pod Mounting Origins)"
                     self.status_msg = f"LiDAR: {mode_str}"
                     self.status_timer = 50
                 if event.key == pygame.K_r:
                     self.obs, self.info = self.env.reset()
                     self.total_reward = 0.0
                     self.trail.clear()
-                    if self.backend == "gazebo":
-                        self.status_msg = "Teleported vehicle to start pose in Gazebo 3D."
-                    else:
-                        self.status_msg = "Reset vehicle and track."
+                    self.status_msg = "Teleported vehicle to start pose in Gazebo 3D."
                     self.status_timer = 50
                 if event.key == pygame.K_p:
                     self.paused = not self.paused
-                if event.key == pygame.K_n:
-                    self.obs, self.info = self.env.reset()
-                    self.trail.clear()
-                    self.status_msg = "Generated new procedural track!"
-                    self.status_timer = 60
-                if event.key == pygame.K_e:
-                    export_p = (
-                        PROJECT_ROOT / "src" / "v2" / "model" / "procedural_track.sdf"
-                    )
-                    if self.env.track:
-                        self.env.track.export_gazebo_sdf(export_p)
-                        self.status_msg = f"Exported Gazebo SDF: {export_p.name}"
-                        self.status_timer = 90
                 if event.key == pygame.K_TAB:
                     # Manually cycle mission phase
                     self.env.mission_phase = (self.env.mission_phase + 1) % 3
@@ -288,46 +251,12 @@ class CarTeleopApp:
             ]
             pygame.draw.lines(self.screen, (60, 130, 90), False, trail_pts, 2)
 
-        # 5. Draw 360-degree LiDAR Returns (Physical Beams / Policy Bins / Point Cloud)
+        # 5. Draw 3D LiDAR Returns (Policy Bins / Point Cloud)
         cos_y = math.cos(car_yaw)
         sin_y = math.sin(car_yaw)
 
-        if self.lidar_render_mode == LIDAR_MODE_PHYSICAL_BEAMS:
-            # 5a. Physical LiDAR Beams: originating from the 4 actual hardware pod mounting locations!
-            pod_beams = self.info.get("raw_pod_beams", None)
-            if pod_beams is None or len(pod_beams) == 0:
-                pod_beams = getattr(self.env, "latest_raw_pod_beams", [])
-
-            for pod in pod_beams:
-                x_pod, y_pod = pod["origin_ego"]
-                origin_wx = car_x + x_pod * cos_y - y_pod * sin_y
-                origin_wy = car_y + x_pod * sin_y + y_pod * cos_y
-                origin_screen = self.world_to_screen(origin_wx, origin_wy, car_x, car_y)
-
-                endpoints_ego = pod["endpoints_ego"]
-                classes = pod["classes"]
-                is_hit = pod["is_hit"]
-
-                for (xe, ye), h_cls, hit in zip(endpoints_ego, classes, is_hit):
-                    end_wx = car_x + xe * cos_y - ye * sin_y
-                    end_wy = car_y + xe * sin_y + ye * cos_y
-                    end_screen = self.world_to_screen(end_wx, end_wy, car_x, car_y)
-
-                    if hit:
-                        if h_cls == CLASS_VEHICLE:
-                            color = OBS_VEHICLE_COLOR
-                        elif h_cls == CLASS_PEDESTRIAN:
-                            color = OBS_PED_COLOR
-                        else:
-                            color = WALL_COLOR
-                        pygame.draw.line(self.screen, color, origin_screen, end_screen, 1)
-                        pygame.draw.circle(self.screen, color, end_screen, 2)
-                    else:
-                        # Subtle unoccluded beam
-                        pygame.draw.line(self.screen, (22, 38, 30), origin_screen, end_screen, 1)
-
-        elif self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
-            # 5b. Policy observation rays (72 ego-centroid spatial sectors around vehicle center)
+        if self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
+            # 5a. Policy observation rays (72 ego-centroid spatial sectors around vehicle center)
             car_screen = self.world_to_screen(car_x, car_y, car_x, car_y)
             norm_dists = self.obs[12:84]
             hit_classes = self.obs[84:156]
@@ -342,17 +271,13 @@ class CarTeleopApp:
                 h_cls = int(hit_classes[i])
                 if h_cls == CLASS_FREE:
                     color = (25, 45, 35)
-                elif h_cls == CLASS_VEHICLE:
-                    color = OBS_VEHICLE_COLOR
-                elif h_cls == CLASS_PEDESTRIAN:
-                    color = OBS_PED_COLOR
                 else:
                     color = WALL_COLOR
 
                 pygame.draw.line(self.screen, color, car_screen, end_screen, 1)
 
         else:
-            # 5c. High-Resolution Contact Point Cloud Only
+            # 5b. Segmented 3D point cloud (front+rear)
             raw_pts = self.info.get("raw_lidar_points_ego", None)
             if raw_pts is None or len(raw_pts) == 0:
                 raw_pts = getattr(self.env, "latest_raw_lidar_points_ego", np.empty((0, 2)))
@@ -540,28 +465,16 @@ class CarTeleopApp:
         self.screen.blit(title, (x, y))
         y += 24
 
-        if self.backend == "gazebo":
-            backend_lbl = self.font_small.render(
-                "BACKEND: GAZEBO 3D (ROS 2 BRIDGE) | ACKERMANN", True, TEXT_GREEN
-            )
-            n_pods = self.info.get("active_pods", 0)
-            lidar_sub_lbl = self.font_small.render(
-                f"LIDAR: ROS 2 LIVE ({n_pods} Pods / 660 Beams, 20Hz)",
-                True,
-                TEXT_CYAN,
-            )
-        else:
-            backend_lbl = self.font_small.render(
-                f"BACKEND: {self.backend.upper()} | NON-HOLONOMIC ACKERMANN",
-                True,
-                TEXT_MUTED,
-            )
-            lidar_sub_lbl = self.font_small.render(
-                "LIDAR: MOCK ANALYTICAL RAYCASTER (72 Rays)",
-                True,
-                TEXT_MUTED,
-            )
-        self.screen.blit(backend_lbl, (x, y))
+        gazebo_lbl = self.font_small.render(
+            "BACKEND: GAZEBO 3D (ROS 2 BRIDGE) | ACKERMANN", True, TEXT_GREEN
+        )
+        active_clouds = self.info.get("active_clouds", 0)
+        lidar_sub_lbl = self.font_small.render(
+            f"LIDAR: ROS 2 3D LIVE ({active_clouds}c / FRONT+REAR, 20Hz)",
+            True,
+            TEXT_CYAN,
+        )
+        self.screen.blit(gazebo_lbl, (x, y))
         y += 18
         self.screen.blit(lidar_sub_lbl, (x, y))
         y += 24
@@ -681,35 +594,26 @@ class CarTeleopApp:
                     rx = radar_cx + int(d_ratio * radar_rad * math.cos(ang))
                     ry = radar_cy + int(d_ratio * radar_rad * math.sin(ang))
                     h_cls = int(hit_classes[i])
-                    col = (
-                        OBS_VEHICLE_COLOR
-                        if h_cls == CLASS_VEHICLE
-                        else OBS_PED_COLOR
-                        if h_cls == CLASS_PEDESTRIAN
-                        else WALL_COLOR
-                    )
+                    col = WALL_COLOR if h_cls != CLASS_FREE else (25, 45, 35)
                     pygame.draw.circle(self.screen, col, (rx, ry), 2)
 
-        lidar_src = self.info.get("lidar_source", "mock")
-        if lidar_src == "ros_gz":
+        lidar_src = self.info.get("lidar_source", "ros_gz_3d")
+        if lidar_src == "ros_gz_3d":
             n_hits = len(raw_pts) if raw_pts is not None else 0
-            n_pods = self.info.get("active_pods", 4)
+            active_clouds = self.info.get("active_clouds", 0)
             radar_lbl = self.font_small.render(
-                f"ROS 2 LiDAR ({n_pods}p, {n_hits}pts)", True, TEXT_CYAN
+                f"ROS 2 3D LiDAR ({active_clouds}c, {n_hits}pts)", True, TEXT_CYAN
             )
         else:
-            radar_lbl = self.font_small.render("360° LIDAR (4 Pods, 15m)", True, TEXT_MUTED)
+            radar_lbl = self.font_small.render("360° LIDAR (15m)", True, TEXT_MUTED)
         self.screen.blit(radar_lbl, (radar_cx - 65, radar_cy + radar_rad + 6))
 
         # Mode Indicator
-        if self.lidar_render_mode == LIDAR_MODE_PHYSICAL_BEAMS:
-            mode_badge = "VIEW: PHYSICAL BEAMS (4-Pod Chassis Origins)"
-            mode_col = TEXT_CYAN
-        elif self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
-            mode_badge = "VIEW: RL POLICY BINS (72-Ray Centered Grid)"
+        if self.lidar_render_mode == LIDAR_MODE_POLICY_GRID:
+            mode_badge = "VIEW: RL POLICY BINS (72-RAY GRID)"
             mode_col = TEXT_YELLOW
         else:
-            mode_badge = "VIEW: CONTACT POINT CLOUD (660 Hits)"
+            mode_badge = "VIEW: 3D LIDAR CLOUD (FRONT+REAR)"
             mode_col = (255, 120, 100)
         mode_txt = self.font_small.render(mode_badge, True, mode_col)
         self.screen.blit(mode_txt, (x, radar_cy + radar_rad + 24))
@@ -733,9 +637,7 @@ class CarTeleopApp:
             "  [A / D]  Steer Left / Right (Ackermann)",
             "  [Space]  Handbrake (instant stop)",
             "  [Tab]    Cycle Phase (A->B, Hold, B->A)",
-            "  [L]      LiDAR View: Physical / Policy / Cloud",
-            "  [N]      Generate New Procedural Track",
-            "  [E]      Export Track to Gazebo 3D SDF",
+            "  [L]      LiDAR View: Policy / Cloud",
             "  [R]      Reset Vehicle & Track",
             "  [P]      Pause Simulation",
             "  [Esc]    Quit",
@@ -817,10 +719,7 @@ class CarTeleopApp:
                         self.collision_flash_timer = 45
                     self.total_reward = 0.0
                     self.trail.clear()
-                    if self.backend == "gazebo":
-                        self.status_msg = "Episode reset. Vehicle returned to start in Gazebo."
-                    else:
-                        self.status_msg = "Episode reset. Vehicle returned to start."
+                    self.status_msg = "Episode reset. Vehicle returned to start in Gazebo."
                     self.status_timer = 60
 
             self.draw_world()
@@ -834,22 +733,7 @@ class CarTeleopApp:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Car Teleop & 360 perception viewer")
-    parser.add_argument(
-        "--backend",
-        choices=["sim", "gazebo"],
-        default="sim",
-        help="Backend simulation engine",
-    )
-    parser.add_argument(
-        "--preset",
-        choices=list(PRESETS),
-        default=DEFAULT_PRESET,
-        help="Procedural track layout preset",
-    )
-    args = parser.parse_args()
-
-    app = CarTeleopApp(backend=args.backend, preset=args.preset)
+    app = CarTeleopApp()
     app.run()
 
 

@@ -1,7 +1,7 @@
-"""Build the articulated Gazebo model with 4-pod LiDAR array from project STEP CAD.
+"""Build the articulated Gazebo model with dual 3D LiDARs from project STEP CAD.
 
 Extracts analytic dimensions from TRACTOR.stp, constructs the 7-link 6-joint kinematic tree,
-equips 4 distributed LiDAR pods (360-degree surround coverage), and generates SDF 1.10.
+equips 2 directional 3D LiDARs (front, rear), and generates SDF 1.10.
 """
 
 from __future__ import annotations
@@ -250,7 +250,7 @@ def create_model(g: dict, p: dict) -> ET.Element:
             chassis,
             name="lidar_front",
             pose=(front_x, front_y, front_z, 0, pitch_down, 0),
-            topic="/tractor/lidar/front/points",
+            topic="/tractor/lidar/front",
             samples=180,
             min_angle=-1.047198,
             max_angle=1.047198,
@@ -264,7 +264,7 @@ def create_model(g: dict, p: dict) -> ET.Element:
             chassis,
             name="lidar_rear",
             pose=(rear_x, rear_y, rear_z, 0, pitch_down, math.pi),
-            topic="/tractor/lidar/rear/points",
+            topic="/tractor/lidar/rear",
             samples=180,
             min_angle=-1.047198,
             max_angle=1.047198,
@@ -543,7 +543,7 @@ def main() -> None:
     element(
         config_tree,
         "description",
-        "CAD-derived articulated tractor with 4-pod LiDAR array.",
+        "CAD-derived articulated tractor with dual directional 3D LiDAR.",
     )
     write_xml(model_dir / "model.config", config_tree)
 
@@ -558,7 +558,7 @@ def main() -> None:
         f"  Wheelbase: {g['wheelbase_m']:.3f} m\n"
         f"  Rear wheel radius: {g['rear']['wheel_radius_m']:.3f} m (track: {g['rear']['track_m']:.3f} m)\n"
         f"  Front wheel radius: {g['front']['wheel_radius_m']:.3f} m (track: {g['front']['track_m']:.3f} m)\n"
-        f"  LiDAR sensors: 4 pods (front, rear, right, left) on /tractor/lidar/*"
+        f"  LiDAR sensors: 2 directional 3D (front, rear) on /tractor/lidar/*/points"
     )
 
 

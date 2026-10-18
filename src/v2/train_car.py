@@ -28,7 +28,6 @@ from ray.rllib.algorithms.ppo import PPOConfig  # noqa: E402
 from ray.tune.registry import register_env  # noqa: E402
 
 from src.sim.car_gazebo_env import CarGazeboEnv  # noqa: E402
-from src.sim.track_generator import DEFAULT_PRESET, PRESETS  # noqa: E402
 from src.v2.cluster_config import HEAD_ADDRESS, HEAD_TMPDIR  # noqa: E402
 
 ENV_NAME = "CarGazeboEnv-v0"
@@ -45,9 +44,7 @@ def evaluate_and_record(
     iter_idx: int,
     video_dir: Path,
     num_episodes: int = 1,
-    num_obstacles: int = 6,
     max_steps: int = 800,
-    preset: str = DEFAULT_PRESET,
 ) -> list[dict[str, Any]]:
     """Runs evaluation episodes on the head node and writes rendered MP4 videos."""
     import cv2
@@ -58,12 +55,7 @@ def evaluate_and_record(
     module = algo.get_module()
 
     for ep in range(num_episodes):
-        env = CarGazeboEnv(
-            sim_mode="mock",
-            num_obstacles=num_obstacles,
-            render_mode="rgb_array",
-            preset=preset,
-        )
+        env = CarGazeboEnv(render_mode="rgb_array")
         obs, info = env.reset()
         frames: list[np.ndarray] = [env.render()]
         total_reward = 0.0
@@ -147,13 +139,6 @@ def main() -> None:
         help="Number of distributed environment runners",
     )
     parser.add_argument(
-        "--sim-mode",
-        type=str,
-        default="mock",
-        choices=["mock", "gazebo"],
-        help="Simulation mode: 'mock' (analytical CPU) or 'gazebo' (live ROS 2 Gazebo simulation)",
-    )
-    parser.add_argument(
         "--eval-interval",
         type=int,
         default=2,
@@ -176,13 +161,6 @@ def main() -> None:
         type=int,
         default=6000,
         help="Maximum steps per evaluation episode (default: 6000 covers ~185 m site roundtrip)",
-    )
-    parser.add_argument(
-        "--preset",
-        type=str,
-        default=DEFAULT_PRESET,
-        choices=list(PRESETS),
-        help="Track preset for training and eval",
     )
     parser.add_argument(
         "--num-learners",
@@ -259,11 +237,8 @@ def main() -> None:
             },
             ignore_reinit_error=True,
         )
-        if args.sim_mode == "gazebo":
-            num_runners = args.runners if args.runners is not None else 1
-            print(f"[train] Gazebo mode: using {num_runners} environment runner(s) for live ROS 2 simulation.")
-        else:
-            num_runners = args.runners if args.runners is not None else 2
+        num_runners = args.runners if args.runners is not None else 1
+        print(f"[train] Gazebo mode: using {num_runners} environment runner(s) for live ROS 2 simulation.")
 
     register_env(ENV_NAME, env_creator)
     print(
@@ -280,10 +255,7 @@ def main() -> None:
             enable_rl_module_and_learner=True,
             enable_env_runner_and_connector_v2=True,
         )
-        .environment(
-            ENV_NAME,
-            env_config={"sim_mode": args.sim_mode, "num_obstacles": 6, "preset": args.preset},
-        )
+        .environment(ENV_NAME, env_config={"pose_noise_std": 0.05, "kinematics_noise_std": 0.02})
         .framework("torch")
         .training(
             train_batch_size=args.train_batch_size,
@@ -331,9 +303,7 @@ def main() -> None:
                 iter_idx=iter_num,
                 video_dir=video_dir,
                 num_episodes=args.eval_episodes,
-                num_obstacles=6,
                 max_steps=args.eval_max_steps,
-                preset=args.preset,
             )
 
     save_dir = CHECKPOINTS_DIR / "final_checkpoint"

@@ -17,7 +17,48 @@ from typing import Final
 
 import numpy as np
 
-from .mock_perception import SimulatedEntity
+
+@dataclass
+class SimulatedEntity:
+    """Ground truth state of an actor/obstacle in Gazebo."""
+
+    name: str
+    class_id: int
+    class_name: str
+    world_x: float
+    world_y: float
+    world_vx: float
+    world_vy: float
+    radius: float
+    shape: str = "cylinder"  # "cylinder" or "box"
+    length: float = 0.0  # longitudinal footprint (if box)
+    width: float = 0.0  # lateral footprint (if box)
+    height: float = 0.8
+    yaw: float = 0.0  # orientation (radians)
+    is_dynamic: bool = False
+    patrol_distance: float = 0.0  # max excursion before reversing
+    origin_x: float = 0.0
+    origin_y: float = 0.0
+
+    def step(self, dt: float) -> None:
+        """Advance dynamic entity position along velocity vector with boundary bouncing."""
+        if not self.is_dynamic:
+            return
+        speed = math.hypot(self.world_vx, self.world_vy)
+        if speed < 1e-4:
+            return
+
+        self.world_x += self.world_vx * dt
+        self.world_y += self.world_vy * dt
+
+        if self.patrol_distance > 0.0:
+            dist_from_origin = math.hypot(
+                self.world_x - self.origin_x, self.world_y - self.origin_y
+            )
+            if dist_from_origin >= self.patrol_distance:
+                # Reverse velocity vector
+                self.world_vx = -self.world_vx
+                self.world_vy = -self.world_vy
 
 DEFAULT_WALL_HEIGHT: Final[float] = 1.20
 DEFAULT_WALL_THICKNESS: Final[float] = 0.25

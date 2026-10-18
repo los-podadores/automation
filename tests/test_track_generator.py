@@ -9,11 +9,11 @@ from pathlib import Path
 
 import numpy as np
 
-from src.sim.mock_perception import SimulatedEntity
 from src.sim.track_generator import (
     ESTADIO_SITE,
     MIN_TURN_RADIUS,
     ProceduralTrackGenerator,
+    SimulatedEntity,
 )
 
 

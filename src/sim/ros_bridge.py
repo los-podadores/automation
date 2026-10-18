@@ -1,7 +1,7 @@
 """ROS 2 bridge manager for connecting Gymnasium CarGazeboEnv to live Gazebo simulation.
 
 Communicates with ros_gz_bridge via standard ROS 2 topics:
-- Subscribes to 4-pod LaserScans (/tractor/lidar/*)
+- Subscribes to dual 3D directional LiDAR PointCloud2 (/tractor/lidar/{front,rear}/points)
 - Subscribes to Wheel Odometry (/model/tractor/wheel_odometry)
 - Publishes Ackermann steering angle and drive velocity (/cmd_vel, /model/tractor/steering_angle, /model/tractor/rear_axle/cmd_vel)
 """
@@ -11,11 +11,10 @@ from __future__ import annotations
 import math
 import threading
 import time
-from typing import Any
+
 
 import numpy as np
 
-from src.sim.spatial_map import LaserScanData
 from src.translate.config import (
     FRONT_LIDAR_PITCH_RAD,
     FRONT_LIDAR_X,
@@ -44,7 +43,7 @@ class Ros2GazeboBridge:
             import rclpy
             from geometry_msgs.msg import Twist
             from nav_msgs.msg import Odometry
-            from sensor_msgs.msg import Imu, JointState, LaserScan, PointCloud2
+            from sensor_msgs.msg import Imu, JointState, PointCloud2
             from std_msgs.msg import Float64
         except ImportError as exc:
             raise RuntimeError(
@@ -56,7 +55,6 @@ class Ros2GazeboBridge:
         self.rclpy = rclpy
         self.Twist = Twist
         self.Odometry = Odometry
-        self.LaserScan = LaserScan
         self.PointCloud2 = PointCloud2
         self.Float64 = Float64
         self.JointState = JointState
@@ -76,31 +74,14 @@ class Ros2GazeboBridge:
         self.lock = threading.Lock()
 
         # Cached state from Gazebo
-        self.latest_scans: dict[str, LaserScanData] = {}
         self.latest_point_clouds: dict[str, np.ndarray] = {}
         self.latest_odom: dict[str, float] | None = None
         self.latest_steering_angle: float = 0.0
         self.latest_imu: dict[str, float] | None = None
         self.latest_collision: bool = False
-        self.obstacle_states: dict[int, dict[str, float]] = {}
-        self.last_scan_time: float = 0.0
         self._last_vx: float = 0.0
         self._last_vx_time: float = 0.0
         self._ax: float = 0.0
-
-        # Subscriptions: 4 LiDAR Pods (LaserScan)
-        self.sub_front = self.node.create_subscription(
-            LaserScan, "/tractor/lidar/front", lambda m: self._on_scan("front", m), 10
-        )
-        self.sub_rear = self.node.create_subscription(
-            LaserScan, "/tractor/lidar/rear", lambda m: self._on_scan("rear", m), 10
-        )
-        self.sub_right = self.node.create_subscription(
-            LaserScan, "/tractor/lidar/right", lambda m: self._on_scan("right", m), 10
-        )
-        self.sub_left = self.node.create_subscription(
-            LaserScan, "/tractor/lidar/left", lambda m: self._on_scan("left", m), 10
-        )
 
         # Subscriptions: 3D Directional LiDARs (PointCloud2)
         self.sub_cloud_front = self.node.create_subscription(
@@ -164,19 +145,6 @@ class Ros2GazeboBridge:
         except Exception:
             pass
 
-    def _on_scan(self, pod_name: str, msg: Any) -> None:
-        scan_data = LaserScanData(
-            ranges=np.array(msg.ranges, dtype=np.float32),
-            angle_min=float(msg.angle_min),
-            angle_max=float(msg.angle_max),
-            angle_increment=float(msg.angle_increment),
-            range_min=float(msg.range_min),
-            range_max=float(msg.range_max),
-        )
-        with self.lock:
-            self.latest_scans[pod_name] = scan_data
-            self.last_scan_time = time.monotonic()
-
     @staticmethod
     def _parse_point_cloud2(msg: Any) -> np.ndarray:
         if not hasattr(msg, "data") or len(msg.data) == 0:
@@ -225,10 +193,8 @@ class Ros2GazeboBridge:
             ze = -pts[:, 0] * s_p + pts[:, 2] * c_p + REAR_LIDAR_Z
 
         pts_ego = np.column_stack([xe, ye, ze]).astype(np.float32)
-
         with self.lock:
             self.latest_point_clouds[pod_name] = pts_ego
-            self.last_scan_time = time.monotonic()
 
     def get_point_clouds(self) -> dict[str, np.ndarray]:
         """Thread-safe snapshot of latest 3D point clouds in vehicle ego coordinates."""
@@ -383,12 +349,8 @@ class Ros2GazeboBridge:
         with self.lock:
             return self.latest_collision
 
-    def get_obstacle_states(self) -> dict[int, dict[str, float]]:
-        """Deprecated: dynamic obstacles are perceived strictly through LiDAR point returns."""
-        return {}
-
-    def get_state(self) -> tuple[dict[str, float] | None, dict[str, LaserScanData]]:
-        """Retrieve latest thread-safe snapshot of odometry and 4-pod scans."""
+    def get_state(self) -> tuple[dict[str, float] | None, dict[str, np.ndarray]]:
+        """Retrieve latest thread-safe snapshot of odometry and 3D point clouds."""
         with self.lock:
             odom = dict(self.latest_odom) if self.latest_odom is not None else None
             if odom is not None:
@@ -399,8 +361,8 @@ class Ros2GazeboBridge:
                 else:
                     odom["ax"] = self._ax
                     odom["ay"] = odom["vx"] * odom["yaw_rate"]
-            scans = dict(self.latest_scans)
-        return odom, scans
+            clouds = dict(self.latest_point_clouds)
+        return odom, clouds
 
     def close(self) -> None:
         """Clean shutdown of node and executor."""

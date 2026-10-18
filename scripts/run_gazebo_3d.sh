@@ -56,4 +56,4 @@ trap cleanup EXIT INT TERM
 sleep 3.0
 
 echo "  Starting Teleoperation HUD with live ROS 2 bridge to Gazebo Harmonic..."
-./scripts/run_teleop --backend gazebo --preset "$PRESET"
+./scripts/run_teleop
