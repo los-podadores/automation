@@ -25,6 +25,7 @@ import pygame  # noqa: E402
 from src.sim.car_gazebo_env import (  # noqa: E402
     CarGazeboEnv,
 )
+from src.sim.track_generator import DEFAULT_PRESET, PRESETS  # noqa: E402
 from src.translate.config import (  # noqa: E402
     CAR_LENGTH,
     CAR_WIDTH,
@@ -87,7 +88,7 @@ PIXELS_PER_METER: Final[float] = 14.0  # 1 meter = 14 pixels
 class CarTeleopApp:
     """Interactive GUI application for controlling the autonomous car in 3D simulation."""
 
-    def __init__(self, backend: str = "sim", preset: str = "demo_90deg") -> None:
+    def __init__(self, backend: str = "sim", preset: str = DEFAULT_PRESET) -> None:
         pygame.init()
         pygame.display.set_caption("Los Podadores — Ackermann Car Teleop & 360° LiDAR")
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
@@ -836,8 +837,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--preset",
-        choices=["demo_90deg", "multi_zone_plaza", "random"],
-        default="demo_90deg",
+        choices=list(PRESETS),
+        default=DEFAULT_PRESET,
         help="Procedural track layout preset",
     )
     args = parser.parse_args()

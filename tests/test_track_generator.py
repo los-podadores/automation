@@ -20,27 +20,30 @@ class TestModularTrackGenerator(unittest.TestCase):
     def setUp(self) -> None:
         self.gen = ProceduralTrackGenerator(default_road_width=7.0)
 
-    def test_demo_90deg_geometry(self) -> None:
-        """Verify Demo 1 generates straight + -90 degree (right) turn + courtyard."""
-        track = self.gen.generate_demo_90deg(seed=42)
+    def test_estadio_ho_chi_min_geometry(self) -> None:
+        """Verify site scenario generates 100m road + left turn + 60x40m lot + apron."""
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
 
-        self.assertEqual(track.preset_name, "demo_90deg")
+        self.assertEqual(track.preset_name, "estadio_ho_chi_min")
         self.assertAlmostEqual(track.start_pose[0], 0.0, places=2)
         self.assertAlmostEqual(track.start_pose[1], 0.0, places=2)
         self.assertAlmostEqual(track.start_pose[2], 0.0, places=2)
 
-        # End heading should be -90 degrees (-pi/2)
-        expected_goal_heading = -math.pi / 2.0
+        # End heading should be +90 degrees (+pi/2) after left turn
+        expected_goal_heading = math.pi / 2.0
         self.assertAlmostEqual(track.goal_pose[2], expected_goal_heading, delta=0.08)
 
         # Waypoints forward shape
-        self.assertGreater(len(track.waypoints_forward), 50)
+        self.assertGreater(len(track.waypoints_forward), 200)
         self.assertEqual(track.waypoints_forward.shape[1], 3)
         self.assertEqual(track.waypoints_reverse.shape, track.waypoints_forward.shape)
 
+        # 1:1 site scale: ~184.6m nominal (100 + 12.57 + 60 + 12)
+        self.assertGreater(track.nominal_length, 170.0)
+        self.assertLess(track.nominal_length, 200.0)
+
         # Fair optimized max episode steps (roundtrip buffer)
-        self.assertGreater(track.max_episode_steps, 3000)
-        self.assertLess(track.max_episode_steps, 8000)
+        self.assertGreater(track.max_episode_steps, 8000)
 
         # Check turn curvature radius >= MIN_TURN_RADIUS
         pts = track.waypoints_forward[:, :2]
@@ -58,30 +61,6 @@ class TestModularTrackGenerator(unittest.TestCase):
             min_r = float(np.min(radii))
             self.assertGreaterEqual(min_r, MIN_TURN_RADIUS - 0.5)
 
-    def test_multi_zone_plaza_features(self) -> None:
-        """Verify OpenPlazaZone creates wide perimeter walls and large box obstacles."""
-        track = self.gen.generate_multi_zone_plaza(seed=101)
-
-        self.assertEqual(track.preset_name, "multi_zone_plaza")
-        self.assertGreater(track.nominal_length, 100.0)
-
-        # Check for large box obstacles (Shipping container or delivery truck)
-        box_obstacles = [obs for obs in track.obstacles if obs.shape == "box"]
-        self.assertGreaterEqual(len(box_obstacles), 2)
-        for box_obs in box_obstacles:
-            self.assertGreater(box_obs.length, 3.0)
-            self.assertGreater(box_obs.width, 1.5)
-
-        # Check for dynamic obstacle
-        dynamic_obs = [obs for obs in track.obstacles if obs.is_dynamic]
-        self.assertGreaterEqual(len(dynamic_obs), 1)
-        self.assertGreater(dynamic_obs[0].patrol_distance, 5.0)
-
-        # Check wide perimeter walls (distance between left and right walls in plaza >= 25m)
-        plaza_left_walls = [
-            p for p in track.wall_segments if abs(p[0][1]) > 10.0 or abs(p[1][1]) > 10.0
-        ]
-        self.assertGreater(len(plaza_left_walls), 0)
 
     def test_random_track_generation(self) -> None:
         """Verify random track scales inside range with fair max_episode_steps."""
@@ -100,7 +79,7 @@ class TestModularTrackGenerator(unittest.TestCase):
 
     def test_json_roundtrip_with_new_fields(self) -> None:
         """Verify JSON export/load retains preset_name, box shapes, and dynamic fields."""
-        track = self.gen.generate_demo_90deg(seed=42)
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
         with tempfile.TemporaryDirectory() as tmpdir:
             json_p = Path(tmpdir) / "track.json"
             track.export_json(json_p)

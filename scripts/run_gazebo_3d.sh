@@ -12,7 +12,8 @@ export GZ_SIM_RESOURCE_PATH="$DIR/src/v2/model:${GZ_SIM_RESOURCE_PATH:-}"
 
 echo "=========================================================="
 echo "    Los Podadores — 3D Gazebo Simulation & Teleop"
-PRESET="${1:-demo_90deg}"
+PRESET="${1:-estadio_ho_chi_min}"
+uv run python -c "from src.sim.track_generator import PRESETS; import sys; sys.exit(0 if '$PRESET' in PRESETS else 1)" || { echo "Unknown preset: $PRESET (valid: estadio_ho_chi_min random)"; exit 1; }
 echo "    Preset: $PRESET"
 
 # Terminate any lingering simulation, bridge, or rogue topic publishers from previous runs

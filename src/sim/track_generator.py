@@ -23,6 +23,8 @@ DEFAULT_WALL_HEIGHT: Final[float] = 1.20
 DEFAULT_WALL_THICKNESS: Final[float] = 0.25
 DEFAULT_ROAD_WIDTH: Final[float] = 7.0  # Two-lane corridor road width (meters)
 MIN_TURN_RADIUS: Final[float] = 6.5  # Guaranteed minimum curvature radius (meters)
+DEFAULT_PRESET: Final[str] = "estadio_ho_chi_min"
+PRESETS: Final[tuple[str, ...]] = ("estadio_ho_chi_min", "random")
 
 
 @dataclass
@@ -832,7 +834,7 @@ class ProceduralTrack:
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>350 350</size>
+              <size>600 600</size>
             </plane>
           </geometry>
           <surface>
@@ -848,7 +850,7 @@ class ProceduralTrack:
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>350 350</size>
+              <size>600 600</size>
             </plane>
           </geometry>
           <material>
@@ -1084,62 +1086,28 @@ class ProceduralTrackGenerator:
             preset_name=preset_name,
         )
 
-    def generate_demo_90deg(self, seed: int | None = None) -> ProceduralTrack:
-        """Demo 1: Straight road + -90 degree (right) turn + straight road + return."""
+    def generate_estadio_ho_chi_min(self, seed: int | None = None) -> ProceduralTrack:
+        """Fixed site scenario: 100m road A->junction + left turn + 60x40m lot B + apron (1:1 meters)."""
         seed_val = int(seed) if seed is not None else 42
         rng = np.random.default_rng(seed_val)
 
         zones: list[TrackZone] = [
             StraightCorridorZone(
-                length=32.0, road_width=self.default_road_width, num_obstacles=1
+                length=100.0, road_width=self.default_road_width, num_obstacles=2
             ),
             TurnCorridorZone(
-                turn_angle_rad=-math.pi / 2.0,
+                turn_angle_rad=math.pi / 2.0,
                 radius=8.0,
                 road_width=self.default_road_width,
             ),
-            StraightCorridorZone(
-                length=24.0,
-                road_width=self.default_road_width,
-                num_obstacles=1,
-                has_dynamic_ped=True,
+            OpenPlazaZone(
+                length=60.0, yard_width=40.0, road_width=self.default_road_width
             ),
             TerminalCourtyardZone(
                 length=12.0, courtyard_width=18.0, road_width=self.default_road_width
             ),
         ]
-        return self._build_track_from_zones(zones, seed_val, "demo_90deg", rng)
-
-    def generate_multi_zone_plaza(self, seed: int | None = None) -> ProceduralTrack:
-        """Demo 2: Corridor + -90 deg turn + wide 30m yard with large obstacles + corridor + courtyard."""
-        seed_val = int(seed) if seed is not None else 101
-        rng = np.random.default_rng(seed_val)
-
-        zones: list[TrackZone] = [
-            StraightCorridorZone(
-                length=25.0, road_width=self.default_road_width, num_obstacles=1
-            ),
-            TurnCorridorZone(
-                turn_angle_rad=-math.pi / 2.0,
-                radius=8.0,
-                road_width=self.default_road_width,
-            ),
-            OpenPlazaZone(
-                length=38.0, yard_width=30.0, road_width=self.default_road_width
-            ),
-            TurnCorridorZone(
-                turn_angle_rad=math.pi / 3.0,
-                radius=8.5,
-                road_width=self.default_road_width,
-            ),
-            StraightCorridorZone(
-                length=20.0, road_width=self.default_road_width, num_obstacles=1
-            ),
-            TerminalCourtyardZone(
-                length=14.0, courtyard_width=18.0, road_width=self.default_road_width
-            ),
-        ]
-        return self._build_track_from_zones(zones, seed_val, "multi_zone_plaza", rng)
+        return self._build_track_from_zones(zones, seed_val, "estadio_ho_chi_min", rng)
 
     def generate_random_track(
         self,
@@ -1219,21 +1187,19 @@ class ProceduralTrackGenerator:
         length: float = 95.0,
         road_width: float | None = None,
         num_obstacles: int = 4,
-        preset: str = "demo_90deg",
+        preset: str = DEFAULT_PRESET,
     ) -> ProceduralTrack:
         """Public generation entry point supporting presets or custom random generation."""
         if road_width is not None:
             self.default_road_width = road_width
 
-        if preset == "demo_90deg":
-            return self.generate_demo_90deg(seed=seed)
-        elif preset == "multi_zone_plaza":
-            return self.generate_multi_zone_plaza(seed=seed)
+        if preset == "estadio_ho_chi_min":
+            return self.generate_estadio_ho_chi_min(seed=seed)
         elif preset == "random":
             return self.generate_random_track(
                 seed=seed, min_length=length * 0.9, max_length=length * 1.3
             )
         else:
             raise ValueError(
-                f"Unknown preset: '{preset}'. Valid presets are 'demo_90deg', 'multi_zone_plaza', 'random'."
+                f"Unknown preset: '{preset}'. Valid presets are {list(PRESETS)}."
             )

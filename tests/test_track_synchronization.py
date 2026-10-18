@@ -16,9 +16,7 @@ from src.sim.track_generator import ProceduralTrackGenerator
 class TestTrackSynchronization(unittest.TestCase):
     def setUp(self) -> None:
         self.gen = ProceduralTrackGenerator(default_road_width=7.0)
-        self.track = self.gen.generate_track(
-            seed=123, length=50.0, road_width=7.0, num_obstacles=3
-        )
+        self.track = self.gen.generate_estadio_ho_chi_min(seed=123)
 
     def test_json_export_and_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -84,7 +82,7 @@ class TestTrackSynchronization(unittest.TestCase):
 
     def test_sdf_dynamic_obstacles_and_contact_plugin(self) -> None:
         """Verify dynamic obstacles have TrajectoryFollower, OdometryPublisher, and world has Contact plugin."""
-        track = self.gen.generate_demo_90deg(seed=42)
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
         with tempfile.TemporaryDirectory() as tmpdir:
             sdf_path = Path(tmpdir) / "test_track.sdf"
             track.export_gazebo_sdf(sdf_path)
@@ -119,7 +117,7 @@ class TestTrackSynchronization(unittest.TestCase):
 
     def test_multi_circle_wall_collision_detection(self) -> None:
         """Verify multi-circle collision check catches corner overlaps that single circle misses."""
-        track = self.gen.generate_demo_90deg(seed=42)
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "track.json"
             track.export_json(json_path)
@@ -137,7 +135,7 @@ class TestTrackSynchronization(unittest.TestCase):
 
     def test_parallel_wall_collision_at_physical_envelope(self) -> None:
         """Verify tractor side collision triggers exactly at physical contact (car half-width 0.86m + wall half-thickness 0.15m = 1.01m)."""
-        track = self.gen.generate_demo_90deg(seed=42)
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "track.json"
             track.export_json(json_path)
@@ -165,7 +163,7 @@ class TestTrackSynchronization(unittest.TestCase):
 
     def test_obstacle_collision_at_physical_envelope(self) -> None:
         """Verify obstacle collision triggers when vehicle bounding box contacts obstacle perimeter."""
-        track = self.gen.generate_demo_90deg(seed=42)
+        track = self.gen.generate_estadio_ho_chi_min(seed=42)
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "track.json"
             track.export_json(json_path)

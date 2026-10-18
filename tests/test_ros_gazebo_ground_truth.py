@@ -184,7 +184,7 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         from src.sim.track_generator import ProceduralTrackGenerator
 
         gen = ProceduralTrackGenerator()
-        track = gen.generate_demo_90deg(seed=42)
+        track = gen.generate_estadio_ho_chi_min(seed=42)
 
         # There must be walls enclosing behind Point A (start) and Point B (goal)
         ax, ay, _ = track.start_pose
@@ -213,8 +213,8 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         env = CarGazeboEnv(sim_mode="mock")
         obs, info = env.reset(seed=42)
 
-        # Teleport car far off-track
-        env.car_x += 25.0
+        # Teleport car far off-track, away from the goal so progress reward stays negative
+        env.car_x -= 25.0
         env.car_y += 25.0
 
         obs, reward, terminated, truncated, info = env.step(np.array([0.0, 0.5], dtype=np.float32))

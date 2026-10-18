@@ -28,6 +28,7 @@ from ray.rllib.algorithms.ppo import PPOConfig  # noqa: E402
 from ray.tune.registry import register_env  # noqa: E402
 
 from src.sim.car_gazebo_env import CarGazeboEnv  # noqa: E402
+from src.sim.track_generator import DEFAULT_PRESET, PRESETS  # noqa: E402
 from src.v2.cluster_config import HEAD_ADDRESS, HEAD_TMPDIR  # noqa: E402
 
 ENV_NAME = "CarGazeboEnv-v0"
@@ -46,6 +47,7 @@ def evaluate_and_record(
     num_episodes: int = 1,
     num_obstacles: int = 6,
     max_steps: int = 800,
+    preset: str = DEFAULT_PRESET,
 ) -> list[dict[str, Any]]:
     """Runs evaluation episodes on the head node and writes rendered MP4 videos."""
     import cv2
@@ -60,6 +62,7 @@ def evaluate_and_record(
             sim_mode="mock",
             num_obstacles=num_obstacles,
             render_mode="rgb_array",
+            preset=preset,
         )
         obs, info = env.reset()
         frames: list[np.ndarray] = [env.render()]
@@ -171,8 +174,15 @@ def main() -> None:
     parser.add_argument(
         "--eval-max-steps",
         type=int,
-        default=800,
-        help="Maximum steps per evaluation episode (default: 800 = 40 seconds)",
+        default=6000,
+        help="Maximum steps per evaluation episode (default: 6000 covers ~185 m site roundtrip)",
+    )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default=DEFAULT_PRESET,
+        choices=list(PRESETS),
+        help="Track preset for training and eval",
     )
     parser.add_argument(
         "--num-learners",
@@ -272,7 +282,7 @@ def main() -> None:
         )
         .environment(
             ENV_NAME,
-            env_config={"sim_mode": args.sim_mode, "num_obstacles": 6},
+            env_config={"sim_mode": args.sim_mode, "num_obstacles": 6, "preset": args.preset},
         )
         .framework("torch")
         .training(
@@ -323,6 +333,7 @@ def main() -> None:
                 num_episodes=args.eval_episodes,
                 num_obstacles=6,
                 max_steps=args.eval_max_steps,
+                preset=args.preset,
             )
 
     save_dir = CHECKPOINTS_DIR / "final_checkpoint"

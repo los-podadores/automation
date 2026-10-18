@@ -30,6 +30,7 @@ from src.translate.fusion_types import GoalState
 from .mock_perception import MockPerceptionEngine
 from .spatial_map import EgoKinematics, LaserScanData, SpatialMapBuilder
 from .track_generator import (
+    DEFAULT_PRESET,
     DEFAULT_WALL_THICKNESS,
     ProceduralTrack,
     ProceduralTrackGenerator,
@@ -56,6 +57,7 @@ class CarGazeboEnv(gym.Env):
         track_path: Path | None = None,
         render_mode: str | None = None,
         allow_reverse: bool = False,
+        preset: str = DEFAULT_PRESET,
     ) -> None:
         super().__init__()
         self.sim_mode = sim_mode
@@ -64,6 +66,7 @@ class CarGazeboEnv(gym.Env):
         self.road_width = road_width
         self.render_mode = render_mode
         self.allow_reverse = allow_reverse
+        self.preset = preset
         self._renderer: Any | None = None
         self.rng = np.random.default_rng(random_seed)
         self.track_path = (
@@ -332,7 +335,7 @@ class CarGazeboEnv(gym.Env):
             preset = (
                 str(options["preset"])
                 if options and "preset" in options
-                else "demo_90deg"
+                else self.preset
             )
             track_seed = int(self.rng.integers(0, 1_000_000))
             self.track = self.track_gen.generate_track(
@@ -573,9 +576,10 @@ class CarGazeboEnv(gym.Env):
 
         # 7. Reward Formulation & Bounds Checking
         half_road = self.road_width / 2.0
+        track_len = self.track.nominal_length if self.track is not None else self.track_length
         off_track = (
             abs(goal_state.cross_track_error) > (half_road + 2.0)
-            or curr_dist > (self.track_length * 2.5)
+            or curr_dist > (track_len * 2.5)
         )
 
         # Progress reward: Euclidean delta towards goal + forward velocity alignment
