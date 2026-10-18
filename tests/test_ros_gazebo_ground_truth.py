@@ -223,6 +223,38 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
         self.assertLessEqual(reward, -50.0)
         env.close()
 
+    def test_no_reverse_motion_under_random_inputs(self) -> None:
+        """Verify that when allow_reverse=False, random inputs never cause reverse motion."""
+        from src.sim.car_gazebo_env import CarGazeboEnv
+
+        env = CarGazeboEnv(sim_mode="mock", allow_reverse=False)
+        env.reset(seed=123)
+
+        # 1. Negative throttle command at standstill must keep car at 0.0 m/s
+        obs, reward, terminated, truncated, info = env.step(np.array([0.0, -1.0], dtype=np.float32))
+        self.assertEqual(env.car_vx, 0.0)
+        self.assertGreaterEqual(env.car_x, -1e-6)
+
+        # 2. 50 steps of random uniform / Gaussian actions must never produce negative vx
+        rng = np.random.default_rng(42)
+        for _ in range(50):
+            action = rng.uniform(-1.0, 1.0, size=(2,)).astype(np.float32)
+            obs, reward, terminated, truncated, info = env.step(action)
+            self.assertGreaterEqual(env.car_vx, 0.0)
+            if terminated:
+                break
+        env.close()
+
+    def test_reverse_allowed_when_enabled(self) -> None:
+        """Verify that when allow_reverse=True, negative throttle commands can reverse."""
+        from src.sim.car_gazebo_env import CarGazeboEnv
+
+        env = CarGazeboEnv(sim_mode="mock", allow_reverse=True)
+        env.reset(seed=123)
+        obs, reward, terminated, truncated, info = env.step(np.array([0.0, -1.0], dtype=np.float32))
+        self.assertLess(env.car_vx, 0.0)
+        env.close()
+
 
 if __name__ == "__main__":
     unittest.main()

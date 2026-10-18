@@ -98,7 +98,12 @@ class CarTeleopApp:
         self.font_small = pygame.font.SysFont("monospace", 11)
 
         sim_mode = "gazebo" if self.backend == "gazebo" else "mock"
-        self.env = CarGazeboEnv(sim_mode=sim_mode, num_obstacles=4, road_width=7.0)
+        self.env = CarGazeboEnv(
+            sim_mode=sim_mode,
+            num_obstacles=4,
+            road_width=7.0,
+            allow_reverse=True,
+        )
         reset_opts = {"preset": self.preset} if self.backend == "sim" else None
         self.obs, self.info = self.env.reset(options=reset_opts)
 

@@ -55,6 +55,7 @@ class CarGazeboEnv(gym.Env):
         random_seed: int | None = None,
         track_path: Path | None = None,
         render_mode: str | None = None,
+        allow_reverse: bool = False,
     ) -> None:
         super().__init__()
         self.sim_mode = sim_mode
@@ -62,6 +63,7 @@ class CarGazeboEnv(gym.Env):
         self.track_length = track_length
         self.road_width = road_width
         self.render_mode = render_mode
+        self.allow_reverse = allow_reverse
         self._renderer: Any | None = None
         self.rng = np.random.default_rng(random_seed)
         self.track_path = (
@@ -460,19 +462,23 @@ class CarGazeboEnv(gym.Env):
 
         if self.sim_mode == "gazebo" and self.ros_bridge is not None:
             target_steer = steer_cmd * MAX_STEER_RAD
-            if throttle_cmd >= 0.0:
-                if self.car_vx < -0.1:
-                    # Vehicle is reversing; forward throttle acts as active brake to stop
-                    target_speed = 0.0
-                else:
+            if not self.allow_reverse:
+                if throttle_cmd >= 0.0:
                     target_speed = throttle_cmd * MAX_SPEED_MPS
-            else:
-                if self.car_vx > 0.1:
-                    # Vehicle is moving forward; reverse throttle acts as active brake to stop
-                    target_speed = 0.0
                 else:
-                    # Vehicle is stationary or reversing; engage reverse drive
-                    target_speed = throttle_cmd * abs(MIN_SPEED_MPS)
+                    # Active service braking to a standstill (no reverse motion in forward navigation)
+                    target_speed = 0.0
+            else:
+                if throttle_cmd >= 0.0:
+                    if self.car_vx < -0.1:
+                        target_speed = 0.0
+                    else:
+                        target_speed = throttle_cmd * MAX_SPEED_MPS
+                else:
+                    if self.car_vx > 0.1:
+                        target_speed = 0.0
+                    else:
+                        target_speed = throttle_cmd * abs(MIN_SPEED_MPS)
             self.ros_bridge.publish_action(target_steer, target_speed)
             # Enforce simulation step pacing (50ms at 20 Hz) so Gazebo physics simulates the step
             time.sleep(DT_SECONDS)
@@ -493,7 +499,7 @@ class CarGazeboEnv(gym.Env):
                     self.car_y = (
                         sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
                     )
-                self.car_vx = odom["vx"]
+                self.car_vx = max(0.0, odom["vx"]) if not self.allow_reverse else odom["vx"]
                 self.car_vy = odom.get("vy", 0.0)
                 self.car_yaw_rate = odom["yaw_rate"]
                 self.car_steer = odom.get("steering_angle", target_steer)
@@ -505,16 +511,26 @@ class CarGazeboEnv(gym.Env):
             target_steer = steer_cmd * MAX_STEER_RAD
             self.car_steer += (target_steer - self.car_steer) * 0.35
 
-            # 2. Longitudinal Dynamics (Separate forward acceleration and reverse/braking)
-            if throttle_cmd >= 0.0:
-                target_accel = throttle_cmd * MAX_ACCEL_MPSS
-                self.car_ax = target_accel
-                self.car_vx = min(MAX_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+            # 2. Longitudinal Dynamics
+            if not self.allow_reverse:
+                if throttle_cmd >= 0.0:
+                    target_accel = throttle_cmd * MAX_ACCEL_MPSS
+                    self.car_ax = target_accel
+                    self.car_vx = min(MAX_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+                else:
+                    # Negative action commands service braking to a halt (no reverse driving)
+                    target_decel = abs(throttle_cmd) * MAX_BRAKE_MPSS
+                    self.car_ax = -target_decel
+                    self.car_vx = max(0.0, self.car_vx - target_decel * DT_SECONDS)
             else:
-                # Negative action commands deceleration / reverse
-                target_decel = abs(throttle_cmd) * MAX_BRAKE_MPSS
-                self.car_ax = -target_decel
-                self.car_vx = max(MIN_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+                if throttle_cmd >= 0.0:
+                    target_accel = throttle_cmd * MAX_ACCEL_MPSS
+                    self.car_ax = target_accel
+                    self.car_vx = min(MAX_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
+                else:
+                    target_decel = abs(throttle_cmd) * MAX_BRAKE_MPSS
+                    self.car_ax = -target_decel
+                    self.car_vx = max(MIN_SPEED_MPS, self.car_vx + self.car_ax * DT_SECONDS)
 
             # 3. Non-Holonomic Bicycle / Ackermann Kinematics
             if abs(self.car_vx) > 1e-4:
@@ -617,6 +633,9 @@ class CarGazeboEnv(gym.Env):
             - 0.02 * ((throttle_cmd - self.last_throttle_action) ** 2)
         )
 
+        # Step time penalty to discourage standing still / idling
+        r_step = -0.05
+
         reward = (
             dist_progress
             + r_velocity
@@ -624,6 +643,7 @@ class CarGazeboEnv(gym.Env):
             + r_heading
             + r_reverse
             + r_smooth
+            + r_step
             + phase_bonus
         )
 
