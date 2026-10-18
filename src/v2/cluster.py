@@ -12,11 +12,14 @@ import asyncio
 import os
 import signal
 import subprocess
-import sys
 from pathlib import Path
+import sys
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 import ray
-
 from cluster_config import (
     HEAD_ADDRESS,
     HEAD_IP,
@@ -37,6 +40,7 @@ def is_head_running() -> bool:
     """Check if the local Ray head node is active and reachable."""
     env = os.environ.copy()
     env["TMPDIR"] = HEAD_TMPDIR
+    env["RAY_AUTH_MODE"] = "disabled"
     result = subprocess.run(
         ["ray", "status", "--address", HEAD_ADDRESS],
         capture_output=True,
@@ -56,6 +60,7 @@ def start_head() -> None:
     print(f"[head] Starting Ray head at {HEAD_ADDRESS}...")
     env = os.environ.copy()
     env["TMPDIR"] = HEAD_TMPDIR
+    env["RAY_AUTH_MODE"] = "disabled"
     Path(HEAD_TMPDIR).mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
@@ -222,6 +227,7 @@ def cmd_status() -> None:
     """Print current Ray cluster status."""
     env = os.environ.copy()
     env["TMPDIR"] = HEAD_TMPDIR
+    env["RAY_AUTH_MODE"] = "disabled"
     subprocess.run(["ray", "status", "--address", HEAD_ADDRESS], env=env, check=False)
 
 
@@ -229,6 +235,7 @@ def cmd_test() -> None:
     """Run a distributed test confirming task execution across every node."""
     os.environ["TMPDIR"] = HEAD_TMPDIR
     os.environ["RAY_ENABLE_UV_RUNTIME_ENV"] = "0"
+    os.environ["RAY_AUTH_MODE"] = "disabled"
     print(f"[test] Connecting to Ray cluster at {HEAD_ADDRESS}...")
     ray.init(
         address=HEAD_ADDRESS,

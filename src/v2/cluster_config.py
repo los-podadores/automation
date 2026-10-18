@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Final
 
-HEAD_IP: Final[str] = "100.64.0.13"
+HEAD_IP: Final[str] = "100.64.0.5"
 HEAD_PORT: Final[int] = 6379
 HEAD_ADDRESS: Final[str] = f"{HEAD_IP}:{HEAD_PORT}"
 HEAD_TMPDIR: Final[str] = "/tmp/ray-stable"

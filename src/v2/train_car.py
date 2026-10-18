@@ -45,6 +45,7 @@ def evaluate_and_record(
     video_dir: Path,
     num_episodes: int = 1,
     num_obstacles: int = 6,
+    max_steps: int = 800,
 ) -> list[dict[str, Any]]:
     """Runs evaluation episodes on the head node and writes rendered MP4 videos."""
     import cv2
@@ -68,6 +69,9 @@ def evaluate_and_record(
         truncated = False
 
         while not (terminated or truncated):
+            if step >= max_steps:
+                truncated = True
+                break
             obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
             with torch.no_grad():
                 fwd_out = module.forward_inference({"obs": obs_tensor})
@@ -162,10 +166,17 @@ def main() -> None:
         default="logs/videos",
         help="Directory to save evaluation demo videos",
     )
+    parser.add_argument(
+        "--eval-max-steps",
+        type=int,
+        default=800,
+        help="Maximum steps per evaluation episode (default: 800 = 40 seconds)",
+    )
     args = parser.parse_args()
 
     os.environ["TMPDIR"] = HEAD_TMPDIR
     os.environ["RAY_ENABLE_UV_RUNTIME_ENV"] = "0"
+    os.environ["RAY_AUTH_MODE"] = "disabled"
 
     runtime_excludes = [
         "best_model.zip",
@@ -264,10 +275,12 @@ def main() -> None:
                 video_dir=video_dir,
                 num_episodes=args.eval_episodes,
                 num_obstacles=6,
+                max_steps=args.eval_max_steps,
             )
 
-    ckpt_path = algo.save_checkpoint(str(CHECKPOINTS_DIR / "final_checkpoint"))
-    print(f"\n[train] Checkpoint successfully saved to: {ckpt_path}")
+    save_dir = CHECKPOINTS_DIR / "final_checkpoint"
+    algo.save_checkpoint(str(save_dir))
+    print(f"\n[train] Checkpoint successfully saved to: {save_dir}")
     algo.stop()
     ray.shutdown()
     print("[train] Training completed successfully!")
