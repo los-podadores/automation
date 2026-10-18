@@ -12,16 +12,20 @@ import asyncio
 import os
 import signal
 import subprocess
-from pathlib import Path
 import sys
+import tarfile
+from pathlib import Path
+from typing import Final
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import ray
 from cluster_config import (
     HEAD_ADDRESS,
+    HEAD_HOST,
     HEAD_IP,
     HEAD_PORT,
     HEAD_TMPDIR,
@@ -29,52 +33,14 @@ from cluster_config import (
     WorkerHost,
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-RUN_SCRIPT = BASE_DIR / "run_worker.sh"
-STOP_SCRIPT = BASE_DIR / "stop_worker.sh"
-REMOTE_TEMP_SH = "C:/Windows/Temp/run_ray_worker.sh"
-REMOTE_STOP_SH = "C:/Windows/Temp/stop_ray_worker.sh"
+RUN_HEAD_SCRIPT: Final[Path] = BASE_DIR / "run_head.sh"
+RUN_WORKER_SCRIPT: Final[Path] = BASE_DIR / "run_worker.sh"
+STOP_SCRIPT: Final[Path] = BASE_DIR / "stop_worker.sh"
 
-
-def is_head_running() -> bool:
-    """Check if the local Ray head node is active and reachable."""
-    env = os.environ.copy()
-    env["TMPDIR"] = HEAD_TMPDIR
-    env["RAY_AUTH_MODE"] = "disabled"
-    result = subprocess.run(
-        ["ray", "status", "--address", HEAD_ADDRESS],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
-    return result.returncode == 0
-
-
-def start_head() -> None:
-    """Start local Ray head node if not already running."""
-    if is_head_running():
-        print(f"[head] Ray head already running at {HEAD_ADDRESS}")
-        return
-
-    print(f"[head] Starting Ray head at {HEAD_ADDRESS}...")
-    env = os.environ.copy()
-    env["TMPDIR"] = HEAD_TMPDIR
-    env["RAY_AUTH_MODE"] = "disabled"
-    Path(HEAD_TMPDIR).mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "ray",
-            "start",
-            "--head",
-            f"--node-ip-address={HEAD_IP}",
-            f"--port={HEAD_PORT}",
-            "--disable-usage-stats",
-        ],
-        check=True,
-        env=env,
-    )
-    print(f"[head] Ray head successfully started at {HEAD_ADDRESS}")
+REMOTE_HEAD_SH: Final[str] = "C:/Windows/Temp/run_ray_head.sh"
+REMOTE_WORKER_SH: Final[str] = "C:/Windows/Temp/run_ray_worker.sh"
+REMOTE_STOP_SH: Final[str] = "C:/Windows/Temp/stop_ray_worker.sh"
+REMOTE_CODE_TAR: Final[str] = "C:/Windows/Temp/code.tar.gz"
 
 
 def scp_file(host: WorkerHost, local_path: Path, remote_path: str) -> bool:
@@ -92,15 +58,22 @@ def scp_file(host: WorkerHost, local_path: Path, remote_path: str) -> bool:
     return res.returncode == 0
 
 
-async def run_worker_supervisor(
-    host: WorkerHost, stop_event: asyncio.Event
+async def run_supervisor(
+    host: WorkerHost,
+    script_local: Path,
+    script_remote: str,
+    stop_event: asyncio.Event,
+    is_head: bool = False,
 ) -> None:
-    """Manage a single remote worker over SSH with automatic reconnection."""
-    print(f"[{host.name}] Deploying run script...")
-    if not scp_file(host, RUN_SCRIPT, REMOTE_TEMP_SH):
-        print(f"[{host.name}] ERROR: Failed to scp run script to {host.ip}")
+    """Manage a single remote node (head or worker) over SSH with automatic reconnection."""
+    role = "head" if is_head else "worker"
+    label = f"{host.name} ({role})"
+    print(f"[{label}] Deploying script...")
+    if not scp_file(host, script_local, script_remote):
+        print(f"[{label}] ERROR: Failed to scp script to {host.ip}")
         return
 
+    arg = "" if is_head else f" {HEAD_ADDRESS}"
     ssh_cmd = [
         "ssh",
         "-o",
@@ -112,11 +85,11 @@ async def run_worker_supervisor(
         "-o",
         "BatchMode=yes",
         f"{host.user}@{host.ip}",
-        f"wsl -d Ubuntu-24.04 -u root bash /mnt/c/{REMOTE_TEMP_SH[3:]} {HEAD_ADDRESS}",
+        f"wsl -d Ubuntu-24.04 -u root bash /mnt/c/{script_remote[3:]}{arg}",
     ]
 
     while not stop_event.is_set():
-        print(f"[{host.name}] Launching worker process...")
+        print(f"[{label}] Launching process...")
         try:
             proc = await asyncio.create_subprocess_exec(
                 *ssh_cmd,
@@ -132,7 +105,7 @@ async def run_worker_supervisor(
                         break
                     text = line.decode().strip()
                     if text and not text.startswith("** WARNING:"):
-                        print(f"[{host.name}] {text}")
+                        print(f"[{label}] {text}")
 
             stream_task = asyncio.create_task(stream_output())
             wait_task = asyncio.create_task(proc.wait())
@@ -147,7 +120,7 @@ async def run_worker_supervisor(
                 t.cancel()
 
             if stop_event.is_set():
-                print(f"[{host.name}] Stopping worker process...")
+                print(f"[{label}] Stopping process...")
                 try:
                     proc.terminate()
                     await asyncio.wait_for(proc.wait(), timeout=3.0)
@@ -161,42 +134,56 @@ async def run_worker_supervisor(
 
             await stream_task
             print(
-                f"[{host.name}] SSH session ended (exit={proc.returncode}). Reconnecting in 5s..."
+                f"[{label}] SSH session ended (exit={proc.returncode}). Reconnecting in 5s..."
             )
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"[{host.name}] Exception in supervisor: {e}")
+            print(f"[{label}] Exception in supervisor: {e}")
             await asyncio.sleep(5)
 
 
 async def cmd_up() -> None:
-    """Bring up cluster head and all workers."""
-    start_head()
-
+    """Bring up Ray cluster: start head node on pc01, then workers on pc02-pc06."""
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
     def handle_signal() -> None:
-        print("\nShutdown signal received. Stopping workers...")
+        print("\nShutdown signal received. Stopping cluster...")
         stop_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, handle_signal)
 
-    tasks = [
-        asyncio.create_task(run_worker_supervisor(w, stop_event))
+    print(f"\n[cluster] Starting Ray Head on {HEAD_HOST.name} ({HEAD_HOST.ip})...")
+    head_task = asyncio.create_task(
+        run_supervisor(HEAD_HOST, RUN_HEAD_SCRIPT, REMOTE_HEAD_SH, stop_event, is_head=True)
+    )
+
+    # Allow head node 6 seconds to bind ports before starting workers
+    await asyncio.sleep(6)
+
+    print(f"[cluster] Launching {len(WORKERS)} worker nodes...")
+    worker_tasks = [
+        asyncio.create_task(
+            run_supervisor(w, RUN_WORKER_SCRIPT, REMOTE_WORKER_SH, stop_event, is_head=False)
+        )
         for w in WORKERS
     ]
 
-    print(f"\n[cluster] Supervising {len(WORKERS)} worker nodes. Press Ctrl+C to stop.\n")
-    await asyncio.gather(*tasks, return_exceptions=True)
-    print("[cluster] All workers stopped cleanly.")
+    all_tasks = [head_task, *worker_tasks]
+    print(f"\n[cluster] Supervising Ray cluster (1 head + {len(WORKERS)} workers). Press Ctrl+C to stop.\n")
+    await asyncio.gather(*all_tasks, return_exceptions=True)
+    print("[cluster] Cluster supervision ended.")
 
 
-def cmd_down(stop_head_too: bool = False) -> None:
-    """Stop Ray workers on all remote hosts."""
-    print("[cluster] Stopping all remote Ray workers...")
-    for host in WORKERS:
+def cmd_down(stop_head_too: bool = True) -> None:
+    """Stop Ray processes on remote workers and optionally the head."""
+    hosts_to_stop = list(WORKERS)
+    if stop_head_too:
+        hosts_to_stop.append(HEAD_HOST)
+
+    print(f"[cluster] Stopping Ray on {len(hosts_to_stop)} node(s)...")
+    for host in hosts_to_stop:
         print(f"[{host.name}] Sending stop signal...")
         if scp_file(host, STOP_SCRIPT, REMOTE_STOP_SH):
             cmd = [
@@ -214,107 +201,165 @@ def cmd_down(stop_head_too: bool = False) -> None:
         else:
             print(f"[{host.name}] Failed to reach host {host.ip}")
 
-    if stop_head_too:
-        print("[head] Stopping local Ray head...")
-        env = os.environ.copy()
-        env["TMPDIR"] = HEAD_TMPDIR
-        subprocess.run(["ray", "stop", "--force"], env=env, check=False)
-
     print("[cluster] Down command completed.")
 
 
 def cmd_status() -> None:
-    """Print current Ray cluster status."""
-    env = os.environ.copy()
-    env["TMPDIR"] = HEAD_TMPDIR
-    env["RAY_AUTH_MODE"] = "disabled"
-    subprocess.run(["ray", "status", "--address", HEAD_ADDRESS], env=env, check=False)
+    """Print current Ray cluster status directly from head node."""
+    cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
+        "wsl -d Ubuntu-24.04 -u root /usr/local/bin/uv run --directory /root/rllib --no-sync ray status",
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    lines = [
+        line
+        for line in (res.stdout + res.stderr).splitlines()
+        if not line.startswith("** WARNING:")
+    ]
+    print("\n".join(lines))
 
 
-def cmd_test() -> None:
-    """Run a distributed test confirming task execution across every node."""
-    os.environ["TMPDIR"] = HEAD_TMPDIR
-    os.environ["RAY_ENABLE_UV_RUNTIME_ENV"] = "0"
-    os.environ["RAY_AUTH_MODE"] = "disabled"
-    print(f"[test] Connecting to Ray cluster at {HEAD_ADDRESS}...")
-    ray.init(
-        address=HEAD_ADDRESS,
-        ignore_reinit_error=True,
-        runtime_env={"working_dir": str(BASE_DIR)},
-    )
+def cmd_sync() -> bool:
+    """Package local src/ into a tarball and deploy to HEAD_HOST /root/rllib/."""
+    tar_path = Path("/tmp/los_podadores_code.tar.gz")
+    print(f"[sync] Packaging source code from {PROJECT_ROOT}/src...")
+    src_dir = PROJECT_ROOT / "src"
+    with tarfile.open(tar_path, "w:gz") as tar:
+        for root, dirs, files in os.walk(src_dir):
+            dirs[:] = [d for d in dirs if d not in {".venv", "__pycache__", ".git"}]
+            for f in files:
+                if f.endswith((".pyc", ".pyo")):
+                    continue
+                file_path = Path(root) / f
+                arcname = file_path.relative_to(PROJECT_ROOT)
+                tar.add(file_path, arcname=arcname)
 
-    nodes = ray.nodes()
-    active_nodes = [n for n in nodes if n["Alive"]]
-    print(f"[test] Active nodes in cluster: {len(active_nodes)} / {len(nodes)}")
+    print(f"[sync] Uploading archive ({tar_path.stat().st_size / 1024:.1f} KB) to {HEAD_HOST.name}...")
+    if not scp_file(HEAD_HOST, tar_path, REMOTE_CODE_TAR):
+        print(f"[sync] Failed to upload code archive to {HEAD_HOST.name}")
+        return False
 
-    for n in active_nodes:
-        ip = n["NodeManagerAddress"]
-        hostname = n["NodeName"]
-        cpus = n["Resources"].get("CPU", 0)
-        gpus = n["Resources"].get("GPU", 0)
-        print(f"  - Node {n['NodeID'][:8]} @ {ip} ({hostname}): {cpus} CPUs, {gpus} GPUs")
+    unpack_cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
+        f"wsl -d Ubuntu-24.04 -u root tar -xzf /mnt/c/{REMOTE_CODE_TAR[3:]} -C /root/rllib",
+    ]
+    res = subprocess.run(unpack_cmd, capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        print(f"[sync] Error unpacking code archive: {res.stderr}")
+        return False
 
-    @ray.remote
-    def ping_node() -> dict[str, str | float]:
-        import socket
-        import time
+    print(f"[sync] Successfully synchronized code to {HEAD_HOST.name}:/root/rllib/src")
+    return True
 
-        return {
-            "hostname": socket.gethostname(),
-            "time": time.time(),
-        }
 
-    print("\n[test] Dispatching test tasks to each active node...")
-    futures = []
-    for n in active_nodes:
-        ip = n["NodeManagerAddress"]
-        res_key = f"node:{ip}"
-        f = ping_node.options(resources={res_key: 1}).remote()
-        futures.append((ip, f))
-
-    success = True
-    for ip, fut in futures:
-        try:
-            res = ray.get(fut, timeout=30)
-            print(f"  [OK] Node {ip} responded: {res}")
-        except Exception as e:
-            print(f"  [FAIL] Node {ip} error: {e}")
-            success = False
-
-    ray.shutdown()
-    if not success:
-        print("\n[test] Test FAILED on one or more nodes.")
+def cmd_train(extra_args: list[str]) -> None:
+    """Sync code and run distributed training on the cluster head."""
+    if not cmd_sync():
+        print("[train] Sync failed. Aborting training.")
         sys.exit(1)
-    print("\n[test] All active nodes passed distributed test successfully!")
+
+    args_str = " ".join(extra_args)
+    train_cmd = (
+        f"/usr/local/bin/uv run --directory /root/rllib python src/v2/train_car.py --cluster {args_str}"
+    )
+    ssh_cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
+        f"wsl -d Ubuntu-24.04 -u root {train_cmd}",
+    ]
+
+    print(f"\n[train] Executing distributed training on {HEAD_HOST.name}:")
+    print(f"        {train_cmd}\n")
+    proc = subprocess.Popen(
+        ssh_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("** WARNING:"):
+            print(f"[remote] {stripped}")
+    proc.wait()
+
+    # Pull down any generated evaluation videos
+    print("\n[train] Syncing evaluation videos back to local logs/videos/...")
+    local_vid_dir = PROJECT_ROOT / "logs" / "videos"
+    local_vid_dir.mkdir(parents=True, exist_ok=True)
+    stage_cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
+        "wsl -d Ubuntu-24.04 -u root cp -r /root/rllib/logs/videos /mnt/c/Windows/Temp/",
+    ]
+    subprocess.run(stage_cmd, capture_output=True, check=False)
+
+    fetch_cmd = [
+        "scp",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}:C:/Windows/Temp/videos/*.mp4",
+        str(local_vid_dir),
+    ]
+    fetch_res = subprocess.run(fetch_cmd, capture_output=True, text=True, check=False)
+    if fetch_res.returncode == 0:
+        vids = list(local_vid_dir.glob("*.mp4"))
+        print(f"[train] Successfully synced {len(vids)} evaluation video(s) to {local_vid_dir}")
+    else:
+        print("[train] No new videos found or sync skipped.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ray RLlib cluster manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("up", help="Start cluster and workers")
+    subparsers.add_parser("up", help="Start cluster head (pc01) and workers (pc02-pc06)")
 
-    down_p = subparsers.add_parser("down", help="Stop cluster workers")
+    down_p = subparsers.add_parser("down", help="Stop cluster workers and head")
     down_p.add_argument(
-        "--head",
+        "--workers-only",
         action="store_true",
-        help="Also stop the local head node",
+        help="Leave head node running",
     )
 
     subparsers.add_parser("status", help="Show cluster status")
-    subparsers.add_parser("test", help="Run distributed test on active nodes")
+    subparsers.add_parser("sync", help="Sync latest code to cluster head")
 
-    args = parser.parse_args()
+    train_p = subparsers.add_parser("train", help="Run distributed training on cluster")
+
+    args, unknown = parser.parse_known_args()
 
     match args.command:
         case "up":
             asyncio.run(cmd_up())
         case "down":
-            cmd_down(stop_head_too=args.head)
+            cmd_down(stop_head_too=not args.workers_only)
         case "status":
             cmd_status()
-        case "test":
-            cmd_test()
+        case "sync":
+            cmd_sync()
+        case "train":
+            cmd_train(unknown)
         case _:
             raise ValueError(f"Unknown command: {args.command}")
 
