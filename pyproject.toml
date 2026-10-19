@@ -1,11 +1,11 @@
 [project]
 name = "automation"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "gymnasium>=1.2.3",
+    "gymnasium==1.2.2",
     "matplotlib>=3.11.0",
-    "numpy>=2.4.6",
+    "numpy>=2.0.0",
     "opencv-python-headless>=4.6.0",
     "pygame-ce>=2.5.7",
     "shapely>=2.1.2",
@@ -15,6 +15,7 @@ dependencies = [
     "tensorboard",
     "torch",
     "torchvision",
+    "ray[rllib]>=2.54.0",
 ]
 
 
@@ -26,10 +27,10 @@ dev = [
 # --- LA SOLUCIÓN AQUÍ (Cambiado de 'indices' a 'index') ---
 
 [[tool.uv.index]]
-name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cuda" }
-torchvision = { index = "pytorch-cuda" }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

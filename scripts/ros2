@@ -22,6 +22,7 @@ exec distrobox enter "$CONTAINER_NAME" -- bash -c '
     done
     export PATH=/opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     export GZ_IP=127.0.0.1
+    export GZ_PARTITION="${GZ_PARTITION:-los_podadores}"
     source /opt/ros/jazzy/setup.bash
     exec ros2 "$@"
 ' -- "$@"

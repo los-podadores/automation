@@ -9,6 +9,7 @@ export PATH="/run/current-system/sw/bin:$DIR/scripts:$PATH"
 export DBX_CONTAINER_MANAGER="docker"
 export GZ_IP=127.0.0.1
 export GZ_SIM_RESOURCE_PATH="$DIR/src/v2/model:${GZ_SIM_RESOURCE_PATH:-}"
+export GZ_SIM_SYSTEM_PLUGIN_PATH="$DIR/src/sim/gzdrl/_lib:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
 
 echo "=========================================================="
 echo "    Los Podadores — 3D Gazebo Simulation & Teleop"

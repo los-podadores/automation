@@ -22,13 +22,9 @@ PROJECT_ROOT = BASE_DIR.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-import ray
-from cluster_config import (
+from cluster_config import (  # noqa: E402
     HEAD_ADDRESS,
     HEAD_HOST,
-    HEAD_IP,
-    HEAD_PORT,
-    HEAD_TMPDIR,
     WORKERS,
     WorkerHost,
 )
@@ -225,7 +221,7 @@ def cmd_status() -> None:
 
 
 def cmd_sync() -> bool:
-    """Package local src/ into a tarball and deploy to HEAD_HOST /root/rllib/."""
+    """Package local src/ into a tarball and deploy to HEAD_HOST and all WORKERS in /root/rllib/."""
     tar_path = Path("/tmp/los_podadores_code.tar.gz")
     print(f"[sync] Packaging source code from {PROJECT_ROOT}/src...")
     src_dir = PROJECT_ROOT / "src"
@@ -239,26 +235,28 @@ def cmd_sync() -> bool:
                 arcname = file_path.relative_to(PROJECT_ROOT)
                 tar.add(file_path, arcname=arcname)
 
-    print(f"[sync] Uploading archive ({tar_path.stat().st_size / 1024:.1f} KB) to {HEAD_HOST.name}...")
-    if not scp_file(HEAD_HOST, tar_path, REMOTE_CODE_TAR):
-        print(f"[sync] Failed to upload code archive to {HEAD_HOST.name}")
-        return False
+    all_hosts = [HEAD_HOST, *WORKERS]
+    print(f"[sync] Uploading archive ({tar_path.stat().st_size / 1024:.1f} KB) to {len(all_hosts)} cluster nodes...")
+    for host in all_hosts:
+        if not scp_file(host, tar_path, REMOTE_CODE_TAR):
+            print(f"[sync] Failed to upload code archive to {host.name}")
+            return False
 
-    unpack_cmd = [
-        "ssh",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "BatchMode=yes",
-        f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
-        f"wsl -d Ubuntu-24.04 -u root tar -xzf /mnt/c/{REMOTE_CODE_TAR[3:]} -C /root/rllib",
-    ]
-    res = subprocess.run(unpack_cmd, capture_output=True, text=True, check=False)
-    if res.returncode != 0:
-        print(f"[sync] Error unpacking code archive: {res.stderr}")
-        return False
+        unpack_cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "BatchMode=yes",
+            f"{host.user}@{host.ip}",
+            f"wsl -d Ubuntu-24.04 -u root tar -xzf /mnt/c/{REMOTE_CODE_TAR[3:]} -C /root/rllib",
+        ]
+        res = subprocess.run(unpack_cmd, capture_output=True, text=True, check=False)
+        if res.returncode != 0:
+            print(f"[sync] Error unpacking code archive on {host.name}: {res.stderr}")
+            return False
+        print(f"[sync] Successfully synchronized code to {host.name}:/root/rllib/src")
 
-    print(f"[sync] Successfully synchronized code to {HEAD_HOST.name}:/root/rllib/src")
     return True
 
 
@@ -268,9 +266,20 @@ def cmd_train(extra_args: list[str]) -> None:
         print("[train] Sync failed. Aborting training.")
         sys.exit(1)
 
+    clean_vid_cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
+        f"wsl -d Ubuntu-24.04 -u root bash -c \"rm -rf /root/rllib/logs/videos/* /mnt/c/Users/{HEAD_HOST.user}/videos/*\"",
+    ]
+    subprocess.run(clean_vid_cmd, capture_output=True, check=False)
+
     args_str = " ".join(extra_args)
     train_cmd = (
-        f"/usr/local/bin/uv run --directory /root/rllib python src/v2/train_car.py --cluster {args_str}"
+        f"PYTHONUNBUFFERED=1 /root/rllib/.venv/bin/python /root/rllib/src/v2/train_car.py --cluster {args_str}"
     )
     ssh_cmd = [
         "ssh",
@@ -282,8 +291,8 @@ def cmd_train(extra_args: list[str]) -> None:
         f"wsl -d Ubuntu-24.04 -u root {train_cmd}",
     ]
 
-    print(f"\n[train] Executing distributed training on {HEAD_HOST.name}:")
-    print(f"        {train_cmd}\n")
+    print(f"\n[train] Executing distributed training on {HEAD_HOST.name}:", flush=True)
+    print(f"        {train_cmd}\n", flush=True)
     proc = subprocess.Popen(
         ssh_cmd,
         stdout=subprocess.PIPE,
@@ -294,7 +303,7 @@ def cmd_train(extra_args: list[str]) -> None:
     for line in proc.stdout:
         stripped = line.strip()
         if stripped and not stripped.startswith("** WARNING:"):
-            print(f"[remote] {stripped}")
+            print(f"[remote] {stripped}", flush=True)
     proc.wait()
 
     # Pull down any generated evaluation videos
@@ -308,7 +317,7 @@ def cmd_train(extra_args: list[str]) -> None:
         "-o",
         "BatchMode=yes",
         f"{HEAD_HOST.user}@{HEAD_HOST.ip}",
-        "wsl -d Ubuntu-24.04 -u root cp -r /root/rllib/logs/videos /mnt/c/Windows/Temp/",
+        f"wsl -d Ubuntu-24.04 -u root bash -c \"mkdir -p /mnt/c/Users/{HEAD_HOST.user}/videos && cp -f /root/rllib/logs/videos/*.mp4 /mnt/c/Users/{HEAD_HOST.user}/videos/ 2>/dev/null || true\"",
     ]
     subprocess.run(stage_cmd, capture_output=True, check=False)
 
@@ -318,7 +327,7 @@ def cmd_train(extra_args: list[str]) -> None:
         "StrictHostKeyChecking=no",
         "-o",
         "BatchMode=yes",
-        f"{HEAD_HOST.user}@{HEAD_HOST.ip}:C:/Windows/Temp/videos/*.mp4",
+        f"{HEAD_HOST.user}@{HEAD_HOST.ip}:C:/Users/{HEAD_HOST.user}/videos/*.mp4",
         str(local_vid_dir),
     ]
     fetch_res = subprocess.run(fetch_cmd, capture_output=True, text=True, check=False)
@@ -345,7 +354,8 @@ def main() -> None:
     subparsers.add_parser("status", help="Show cluster status")
     subparsers.add_parser("sync", help="Sync latest code to cluster head")
 
-    train_p = subparsers.add_parser("train", help="Run distributed training on cluster")
+    subparsers.add_parser("train", help="Run distributed training on cluster")
+    subparsers.add_parser("eval", help="Evaluate trained policy in Gazebo")
 
     args, unknown = parser.parse_known_args()
 
@@ -360,6 +370,10 @@ def main() -> None:
             cmd_sync()
         case "train":
             cmd_train(unknown)
+        case "eval":
+            from eval_car import main as eval_main
+            sys.argv = [sys.argv[0], *unknown]
+            eval_main()
         case _:
             raise ValueError(f"Unknown command: {args.command}")
 

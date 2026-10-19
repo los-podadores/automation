@@ -23,9 +23,15 @@ exec distrobox enter "$CONTAINER_NAME" -- bash -c '
     for var in $(compgen -v | grep -E "^(NIX_|CMAKE_|LD_|PYTHON)"); do
         unset "$var"
     done
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export DISPLAY="'"${DISPLAY:-:0}"'"
+    export WAYLAND_DISPLAY="'"${WAYLAND_DISPLAY:-}"'"
+    export XDG_RUNTIME_DIR="'"${XDG_RUNTIME_DIR:-}"'"
     export QT_QPA_PLATFORM=xcb
     export GZ_IP=127.0.0.1
+    export GZ_PARTITION="${GZ_PARTITION:-los_podadores}"
     export GZ_SIM_RESOURCE_PATH="'"$RES_PATH"'"
     export SDF_PATH="'"$RES_PATH"'"
+    export GZ_SIM_SYSTEM_PLUGIN_PATH="'"$DIR"'/src/sim/gzdrl/_lib:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
     exec /usr/bin/gz "$@"
 ' -- "$@"

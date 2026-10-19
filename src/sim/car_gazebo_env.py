@@ -16,15 +16,23 @@ import numpy as np
 import gymnasium as gym
 
 from src.translate.config import (
+    CAR_LENGTH,
+    CAR_WIDTH,
+    COLLISION_PENALTY,
+    CORRIDOR_DEADBAND_RATIO,
+    CRAWL_PENALTY_WEIGHT,
     DT_SECONDS,
+    LIDAR_MAX_RANGE,
     MAX_SPEED_MPS,
     MAX_STEER_RAD,
+    MIN_CRUISE_SPEED_MPS,
     MIN_SPEED_MPS,
+    WHEELBASE,
 )
 from src.translate.fusion_types import GoalState
 from .ground_segmentation import GroundSegmentationEngine
 from .spatial_map import EgoKinematics, SpatialMapBuilder
-from .track_generator import ProceduralTrack
+from .track_generator import DEFAULT_WALL_THICKNESS, ProceduralTrack
 
 # Mission phase constants
 PHASE_A_TO_B: Final[int] = 0
@@ -39,6 +47,7 @@ class CarGazeboEnv(gym.Env):
 
     def __init__(
         self,
+        sim_mode: str = "gazebo",
         random_seed: int | None = None,
         track_path: Path | None = None,
         render_mode: str | None = None,
@@ -47,6 +56,7 @@ class CarGazeboEnv(gym.Env):
         kinematics_noise_std: float = 0.0,
     ) -> None:
         super().__init__()
+        self.sim_mode = sim_mode
         self.render_mode = render_mode
         self.allow_reverse = allow_reverse
         self.pose_noise_std = float(pose_noise_std)
@@ -83,12 +93,18 @@ class CarGazeboEnv(gym.Env):
         self.hold_duration_steps: int = 40  # 2 seconds at 20 Hz for remote teleop hold
         self.max_episode_steps: int = 2400
 
-        # Live ROS 2 / Gazebo Bridge
-        from .ros_bridge import Ros2GazeboBridge
-
-        self.ros_bridge: Any | None = Ros2GazeboBridge()
+        # Perception and backend initialization based on sim_mode
         self._current_clouds: dict[str, np.ndarray] = {}
-        self.seg_engine = GroundSegmentationEngine()
+        if self.sim_mode == "gazebo":
+            from .ros_bridge import Ros2GazeboBridge
+
+            self.ros_bridge: Any | None = Ros2GazeboBridge()
+            self.seg_engine: GroundSegmentationEngine | None = GroundSegmentationEngine()
+        elif self.sim_mode == "analytical":
+            self.ros_bridge = None
+            self.seg_engine = None
+        else:
+            raise ValueError(f"Unknown sim_mode: {self.sim_mode}. Valid options: ('gazebo', 'analytical')")
 
         # Vehicle internal state
         self.car_x: float = 0.0
@@ -199,6 +215,200 @@ class CarGazeboEnv(gym.Env):
             phase=self.mission_phase,
         )
 
+    def _transform_walls_to_ego(
+        self,
+    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        if not self.track:
+            return []
+
+        cos_yaw = math.cos(self.car_yaw)
+        sin_yaw = math.sin(self.car_yaw)
+        ego_walls: list[tuple[tuple[float, float], tuple[float, float]]] = []
+
+        for (wx1, wy1), (wx2, wy2) in self.track.wall_segments:
+            dx1 = wx1 - self.car_x
+            dy1 = wy1 - self.car_y
+            dx2 = wx2 - self.car_x
+            dy2 = wy2 - self.car_y
+
+            ex1 = dx1 * cos_yaw + dy1 * sin_yaw
+            ey1 = -dx1 * sin_yaw + dy1 * cos_yaw
+            ex2 = dx2 * cos_yaw + dy2 * sin_yaw
+            ey2 = -dx2 * sin_yaw + dy2 * cos_yaw
+
+            ego_walls.append(((ex1, ey1), (ex2, ey2)))
+
+        return ego_walls
+
+    @classmethod
+    def _point_to_aabb_dist_sq(
+        cls, px: float, py: float, hx: float, hy: float
+    ) -> float:
+        dx = max(0.0, abs(px) - hx)
+        dy = max(0.0, abs(py) - hy)
+        return dx * dx + dy * dy
+
+    @classmethod
+    def _point_to_segment_dist_sq(
+        cls,
+        px: float,
+        py: float,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+    ) -> float:
+        vx = x2 - x1
+        vy = y2 - y1
+        l2 = vx * vx + vy * vy
+        if l2 < 1e-12:
+            dx = px - x1
+            dy = py - y1
+            return dx * dx + dy * dy
+        t = max(0.0, min(1.0, ((px - x1) * vx + (py - y1) * vy) / l2))
+        proj_x = x1 + t * vx
+        proj_y = y1 + t * vy
+        dx = px - proj_x
+        dy = py - proj_y
+        return dx * dx + dy * dy
+
+    @classmethod
+    def _segment_intersects_aabb(
+        cls, x1: float, y1: float, x2: float, y2: float, hx: float, hy: float
+    ) -> bool:
+        if max(x1, x2) < -hx or min(x1, x2) > hx or max(y1, y2) < -hy or min(y1, y2) > hy:
+            return False
+        if abs(x1) <= hx and abs(y1) <= hy:
+            return True
+        if abs(x2) <= hx and abs(y2) <= hy:
+            return True
+        dx = x2 - x1
+        dy = y2 - y1
+        for edge_x in (-hx, hx):
+            if abs(dx) > 1e-9:
+                t = (edge_x - x1) / dx
+                if 0.0 <= t <= 1.0:
+                    y = y1 + t * dy
+                    if -hy <= y <= hy:
+                        return True
+        for edge_y in (-hy, hy):
+            if abs(dy) > 1e-9:
+                t = (edge_y - y1) / dy
+                if 0.0 <= t <= 1.0:
+                    x = x1 + t * dx
+                    if -hx <= x <= hx:
+                        return True
+        return False
+
+    @classmethod
+    def _segment_aabb_dist(
+        cls, x1: float, y1: float, x2: float, y2: float, hx: float, hy: float
+    ) -> float:
+        if cls._segment_intersects_aabb(x1, y1, x2, y2, hx, hy):
+            return 0.0
+        d_sq = min(
+            cls._point_to_aabb_dist_sq(x1, y1, hx, hy),
+            cls._point_to_aabb_dist_sq(x2, y2, hx, hy),
+            cls._point_to_segment_dist_sq(-hx, -hy, x1, y1, x2, y2),
+            cls._point_to_segment_dist_sq(-hx, hy, x1, y1, x2, y2),
+            cls._point_to_segment_dist_sq(hx, -hy, x1, y1, x2, y2),
+            cls._point_to_segment_dist_sq(hx, hy, x1, y1, x2, y2),
+        )
+        return math.sqrt(d_sq)
+
+    def _check_wall_collision(self) -> bool:
+        """Check if vehicle oriented bounding box intersects wall geometry."""
+        if not self.track:
+            return False
+        hx = CAR_LENGTH / 2.0
+        hy = CAR_WIDTH / 2.0
+        r_eff = (DEFAULT_WALL_THICKNESS / 2.0) + 0.02
+        ego_walls = self._transform_walls_to_ego()
+        for (x1, y1), (x2, y2) in ego_walls:
+            if self._segment_aabb_dist(x1, y1, x2, y2, hx, hy) <= r_eff:
+                return True
+        return False
+
+    def _check_obstacle_collision(self) -> bool:
+        """Check if vehicle oriented bounding box intersects obstacle circles."""
+        if not self.track or not self.track.obstacles:
+            return False
+        cos_y = math.cos(self.car_yaw)
+        sin_y = math.sin(self.car_yaw)
+        hx = CAR_LENGTH / 2.0
+        hy = CAR_WIDTH / 2.0
+        for obs in self.track.obstacles:
+            dx = obs.world_x - self.car_x
+            dy = obs.world_y - self.car_y
+            ex = dx * cos_y + dy * sin_y
+            ey = -dx * sin_y + dy * cos_y
+            dist_to_box = math.sqrt(self._point_to_aabb_dist_sq(ex, ey, hx, hy))
+            if dist_to_box <= (obs.radius + 0.02):
+                return True
+        return False
+
+    def _compute_analytical_obstacle_points(self) -> np.ndarray:
+        """Compute synthetic obstacle points in vehicle ego frame from track geometry."""
+        if not self.track:
+            return np.empty((0, 2), dtype=np.float32)
+
+        ego_walls = self._transform_walls_to_ego()
+        pts_list: list[np.ndarray] = []
+
+        # 1. Sample along wall segments within LIDAR range
+        for (x1, y1), (x2, y2) in ego_walls:
+            if min(abs(x1), abs(x2)) > LIDAR_MAX_RANGE and (x1 * x2 > 0):
+                continue
+            if min(abs(y1), abs(y2)) > LIDAR_MAX_RANGE and (y1 * y2 > 0):
+                continue
+            seg_len = math.hypot(x2 - x1, y2 - y1)
+            num_samples = max(2, int(seg_len / 0.25))
+            ts = np.linspace(0.0, 1.0, num_samples, dtype=np.float32)
+            wx = x1 + ts * (x2 - x1)
+            wy = y1 + ts * (y2 - y1)
+            dists = np.hypot(wx, wy)
+            valid = (dists >= 0.15) & (dists <= LIDAR_MAX_RANGE)
+            if np.any(valid):
+                pts_list.append(np.column_stack([wx[valid], wy[valid]]))
+
+        # 2. Sample around obstacle boundaries
+        if self.track.obstacles:
+            cos_y = math.cos(self.car_yaw)
+            sin_y = math.sin(self.car_yaw)
+            theta = np.linspace(0.0, 2 * math.pi, 16, endpoint=False, dtype=np.float32)
+            cos_th = np.cos(theta)
+            sin_th = np.sin(theta)
+            for obs in self.track.obstacles:
+                dx = obs.world_x - self.car_x
+                dy = obs.world_y - self.car_y
+                ex = dx * cos_y + dy * sin_y
+                ey = -dx * sin_y + dy * cos_y
+                if math.hypot(ex, ey) <= (LIDAR_MAX_RANGE + obs.radius):
+                    ox = ex + obs.radius * cos_th
+                    oy = ey + obs.radius * sin_th
+                    dists = np.hypot(ox, oy)
+                    valid = (dists >= 0.15) & (dists <= LIDAR_MAX_RANGE)
+                    if np.any(valid):
+                        pts_list.append(np.column_stack([ox[valid], oy[valid]]))
+
+        if pts_list:
+            combined = np.vstack(pts_list).astype(np.float32)
+        else:
+            combined = np.empty((0, 2), dtype=np.float32)
+
+        from dataclasses import dataclass
+
+        @dataclass(frozen=True)
+        class _AnalyticalSeg:
+            obstacle_points: np.ndarray
+            negative_hazards: np.ndarray
+
+        self._last_seg = _AnalyticalSeg(
+            obstacle_points=combined,
+            negative_hazards=np.empty((0, 2), dtype=np.float32),
+        )
+        return combined
+
 
     def reset(
         self,
@@ -239,42 +449,70 @@ class CarGazeboEnv(gym.Env):
         self.last_steer_action = 0.0
         self.last_throttle_action = 0.0
 
-        if self.ros_bridge is None:
-            raise RuntimeError("ros_bridge is not initialized.")
-        self.ros_bridge.reset_vehicle(sx, sy, syaw)
-        # Wait up to 3.0s for background executor to receive initial state from Gazebo
-        gate_timeout_sec = 3.0
-        t_start = time.monotonic()
-        while time.monotonic() - t_start < gate_timeout_sec:
-            odom, clouds = self.ros_bridge.get_state()
-            if odom is not None:
-                if self.ros_bridge.has_world_odom:
-                    self.car_x = odom["x"]
-                    self.car_y = odom["y"]
-                    self.car_yaw = odom["yaw"]
-                else:
-                    self.car_yaw = syaw + odom["yaw"]
-                    self.car_x = (
-                        sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+        if self.sim_mode == "gazebo":
+            if self.ros_bridge is None:
+                raise RuntimeError("ros_bridge is not initialized.")
+            self.ros_bridge.reset_vehicle(sx, sy, syaw)
+            # Wait up to 45.0s for Gazebo Harmonic 3D rendering and ROS 2 bridge to deliver initial sensors
+            gate_timeout_sec = 45.0
+            t_start = time.monotonic()
+            last_log = t_start
+            while time.monotonic() - t_start < gate_timeout_sec:
+                odom, clouds = self.ros_bridge.get_state()
+                if odom is not None:
+                    if self.ros_bridge.has_world_odom:
+                        self.car_x = odom["x"]
+                        self.car_y = odom["y"]
+                        self.car_yaw = odom["yaw"]
+                    else:
+                        self.car_yaw = syaw + odom["yaw"]
+                        self.car_x = (
+                            sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+                        )
+                        self.car_y = (
+                            sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                        )
+                    self.car_vx = odom["vx"]
+                    self.car_vy = odom.get("vy", 0.0)
+                    self.car_yaw_rate = odom["yaw_rate"]
+                    self.car_steer = odom.get("steering_angle", 0.0)
+                    self.car_ax = odom.get("ax", 0.0)
+                if clouds:
+                    self._current_clouds.update(clouds)
+                if odom is not None and {"front", "rear"} <= set(self._current_clouds):
+                    print(
+                        f"[gazebo] Sensors synchronized in {time.monotonic() - t_start:.2f}s "
+                        f"(odom: OK, clouds: {list(self._current_clouds.keys())})",
+                        flush=True,
                     )
-                    self.car_y = (
-                        sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                    break
+                now = time.monotonic()
+                if now - last_log > 1.5:
+                    received = set(self._current_clouds)
+                    has_odom = odom is not None
+                    print(
+                        f"[gazebo] Waiting for initial sensors... ({now - t_start:.1f}s / {gate_timeout_sec:.0f}s | odom: {has_odom} | clouds: {received})",
+                        flush=True,
                     )
-                self.car_vx = odom["vx"]
-                self.car_vy = odom.get("vy", 0.0)
-                self.car_yaw_rate = odom["yaw_rate"]
-                self.car_steer = odom.get("steering_angle", 0.0)
-                self.car_ax = odom.get("ax", 0.0)
-            if clouds:
-                self._current_clouds = clouds
-            if odom is not None and {"front", "rear"} <= set(clouds):
-                break
-            time.sleep(0.02)
+                    last_log = now
+                time.sleep(0.05)
 
-        if not ({"front", "rear"} <= set(self._current_clouds)):
-            raise RuntimeError(
-                f"Gazebo 3D LiDAR clouds unavailable after {gate_timeout_sec:.1f}s gate (received: {set(self._current_clouds)})."
-            )
+            if not ({"front", "rear"} <= set(self._current_clouds)):
+                raise RuntimeError(
+                    f"Gazebo 3D LiDAR clouds unavailable after {gate_timeout_sec:.1f}s gate (received: {set(self._current_clouds)}, odom: {odom is not None}).\n"
+                    "Ensure Gazebo Harmonic ('scripts/gz sim') and ros_gz_bridge are running."
+                )
+        elif self.sim_mode == "analytical":
+            self.car_x = sx
+            self.car_y = sy
+            self.car_yaw = syaw
+            self.car_vx = 0.0
+            self.car_vy = 0.0
+            self.car_steer = 0.0
+            self.car_ax = 0.0
+            self.car_yaw_rate = 0.0
+        else:
+            raise ValueError(f"Unknown sim_mode: {self.sim_mode}. Valid options: ('gazebo', 'analytical')")
 
         goal_state = self._compute_goal_state()
         self.prev_dist_to_goal = goal_state.distance
@@ -285,7 +523,7 @@ class CarGazeboEnv(gym.Env):
             "pose": self.pose,
             "dist_to_goal": goal_state.distance,
             "speed": self.car_vx,
-            "lidar_source": "ros_gz_3d",
+            "lidar_source": "ros_gz_3d" if self.sim_mode == "gazebo" else "analytical_track",
             "active_clouds": len(self._current_clouds),
             "collision": False,
         }
@@ -313,17 +551,29 @@ class CarGazeboEnv(gym.Env):
         )
         goal_state = self._compute_goal_state()
 
-        if not self._current_clouds:
-            raise RuntimeError("Gazebo 3D LiDAR clouds unavailable.")
-        combined = np.vstack([self._current_clouds[k] for k in sorted(self._current_clouds)])
-        seg = self.seg_engine.segment(combined)
-        self._last_seg = seg
-        return self.map_builder.build_observation(
-            kinematics=kinematics,
-            goal_state=goal_state,
-            obstacle_points=seg.obstacle_points,
-            negative_hazards=seg.negative_hazards,
-        )
+        if self.sim_mode == "gazebo":
+            if not self._current_clouds:
+                raise RuntimeError("Gazebo 3D LiDAR clouds unavailable.")
+            combined = np.vstack([self._current_clouds[k] for k in sorted(self._current_clouds)])
+            assert self.seg_engine is not None, "seg_engine is not initialized."
+            seg = self.seg_engine.segment(combined)
+            self._last_seg = seg
+            return self.map_builder.build_observation(
+                kinematics=kinematics,
+                goal_state=goal_state,
+                obstacle_points=seg.obstacle_points,
+                negative_hazards=seg.negative_hazards,
+            )
+        elif self.sim_mode == "analytical":
+            obs_pts = self._compute_analytical_obstacle_points()
+            return self.map_builder.build_observation(
+                kinematics=kinematics,
+                goal_state=goal_state,
+                obstacle_points=obs_pts,
+                negative_hazards=None,
+            )
+        else:
+            raise ValueError(f"Unknown sim_mode: {self.sim_mode}. Valid options: ('gazebo', 'analytical')")
 
     def step(
         self, action: np.ndarray
@@ -339,39 +589,64 @@ class CarGazeboEnv(gym.Env):
         else:
             target_speed = throttle_cmd * abs(MIN_SPEED_MPS)
 
-        if self.ros_bridge is None:
-            raise RuntimeError("ros_bridge is not initialized.")
-        target_steer = steer_cmd * MAX_STEER_RAD
-        self.ros_bridge.publish_action(target_steer, target_speed)
-        # Enforce simulation step pacing (50ms at 20 Hz) so Gazebo physics simulates the step
-        time.sleep(DT_SECONDS)
-        odom, clouds = self.ros_bridge.get_state()
-        if odom is not None:
-            if self.ros_bridge.has_world_odom:
-                self.car_x = odom["x"]
-                self.car_y = odom["y"]
-                self.car_yaw = odom["yaw"]
-            else:
-                sx, sy, syaw = (
-                    self.track.start_pose if self.track else (0.0, 0.0, 0.0)
-                )
-                self.car_yaw = syaw + odom["yaw"]
-                self.car_x = (
-                    sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
-                )
-                self.car_y = (
-                    sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
-                )
-            self.car_vx = odom["vx"]
-            self.car_vy = odom.get("vy", 0.0)
-            self.car_yaw_rate = odom["yaw_rate"]
-            self.car_steer = odom.get("steering_angle", target_steer)
-            self.car_ax = odom.get("ax", 0.0)
-        if clouds:
-            self._current_clouds = clouds
+        if self.sim_mode == "gazebo":
+            if self.ros_bridge is None:
+                raise RuntimeError("ros_bridge is not initialized.")
+            target_steer = steer_cmd * MAX_STEER_RAD
+            self.ros_bridge.publish_action(target_steer, target_speed)
+            # Enforce simulation step pacing (50ms at 20 Hz) so Gazebo physics simulates the step
+            time.sleep(DT_SECONDS)
+            odom, clouds = self.ros_bridge.get_state()
+            if odom is not None:
+                if self.ros_bridge.has_world_odom:
+                    self.car_x = odom["x"]
+                    self.car_y = odom["y"]
+                    self.car_yaw = odom["yaw"]
+                else:
+                    sx, sy, syaw = (
+                        self.track.start_pose if self.track else (0.0, 0.0, 0.0)
+                    )
+                    self.car_yaw = syaw + odom["yaw"]
+                    self.car_x = (
+                        sx + odom["x"] * math.cos(syaw) - odom["y"] * math.sin(syaw)
+                    )
+                    self.car_y = (
+                        sy + odom["x"] * math.sin(syaw) + odom["y"] * math.cos(syaw)
+                    )
+                self.car_vx = odom["vx"]
+                self.car_vy = odom.get("vy", 0.0)
+                self.car_yaw_rate = odom["yaw_rate"]
+                self.car_steer = odom.get("steering_angle", target_steer)
+                self.car_ax = odom.get("ax", 0.0)
+            if clouds:
+                self._current_clouds = clouds
 
-        # Gazebo Harmonic Contact System is the sole ground truth
-        collision = self.ros_bridge.get_collision()
+            # Gazebo Harmonic Contact System is the sole ground truth
+            collision = self.ros_bridge.get_collision()
+        elif self.sim_mode == "analytical":
+            target_steer = steer_cmd * MAX_STEER_RAD
+            # 1. Steering dynamics (Ackermann angle with actuator lag)
+            self.car_steer += (target_steer - self.car_steer) * 0.35
+            # 2. Longitudinal powertrain dynamics
+            delta_v = (target_speed - self.car_vx) * 0.25
+            self.car_ax = delta_v / DT_SECONDS
+            self.car_vx += delta_v
+            # 3. Non-holonomic Ackermann bicycle kinematics
+            if abs(self.car_vx) > 1e-4:
+                self.car_yaw_rate = (self.car_vx / WHEELBASE) * math.tan(self.car_steer)
+            else:
+                self.car_yaw_rate = 0.0
+            self.car_yaw += self.car_yaw_rate * DT_SECONDS
+            self.car_x += self.car_vx * math.cos(self.car_yaw) * DT_SECONDS
+            self.car_y += self.car_vx * math.sin(self.car_yaw) * DT_SECONDS
+            # 4. Obstacle motion
+            if self.track and self.track.obstacles:
+                for obs in self.track.obstacles:
+                    obs.step(DT_SECONDS)
+            # 5. Collision checks
+            collision = self._check_wall_collision() or self._check_obstacle_collision()
+        else:
+            raise ValueError(f"Unknown sim_mode: {self.sim_mode}. Valid options: ('gazebo', 'analytical')")
 
         # 6. Mission Phase Transitions
         goal_state = self._compute_goal_state()
@@ -416,9 +691,24 @@ class CarGazeboEnv(gym.Env):
         )
         r_velocity = 0.5 * max(0.0, path_alignment)
 
-        # Centering penalty: quadratically scaled by corridor half-width
-        norm_cte = abs(goal_state.cross_track_error) / max(1.0, half_road)
-        r_centering = -0.3 * (norm_cte**2)
+        # Centering penalty: penalty-free deadband within CORRIDOR_DEADBAND_RATIO of corridor
+        # to permit obstacle avoidance maneuvers without continuous penalty.
+        deadband_m = CORRIDOR_DEADBAND_RATIO * half_road
+        excess_cte = max(0.0, abs(goal_state.cross_track_error) - deadband_m)
+        buffer_zone = max(0.1, half_road - deadband_m)
+        norm_cte = excess_cte / buffer_zone
+        r_centering = -0.4 * (norm_cte**2)
+
+        # Anti-crawl / anti-stalling penalty during transit phases
+        if (
+            self.mission_phase in (PHASE_A_TO_B, PHASE_B_TO_A)
+            and self.car_vx < MIN_CRUISE_SPEED_MPS
+        ):
+            r_crawl = -CRAWL_PENALTY_WEIGHT * (
+                1.0 - max(0.0, self.car_vx) / MIN_CRUISE_SPEED_MPS
+            )
+        else:
+            r_crawl = 0.0
 
         # Heading alignment penalty
         r_heading = 0.2 * (math.cos(goal_state.path_heading_error) - 1.0)
@@ -432,8 +722,8 @@ class CarGazeboEnv(gym.Env):
 
         # Action smoothness penalties
         r_smooth = (
-            -0.05 * ((steer_cmd - self.last_steer_action) ** 2)
-            - 0.02 * ((throttle_cmd - self.last_throttle_action) ** 2)
+            -0.02 * ((steer_cmd - self.last_steer_action) ** 2)
+            - 0.01 * ((throttle_cmd - self.last_throttle_action) ** 2)
         )
 
         # Step time penalty to discourage standing still / idling
@@ -447,13 +737,14 @@ class CarGazeboEnv(gym.Env):
             + r_reverse
             + r_smooth
             + r_step
+            + r_crawl
             + phase_bonus
         )
 
         if collision:
-            reward -= 100.0
+            reward -= COLLISION_PENALTY
         elif off_track:
-            reward -= 100.0
+            reward -= COLLISION_PENALTY
 
         terminated = collision or off_track or mission_completed
         truncated = self.step_count >= self.max_episode_steps
@@ -470,7 +761,7 @@ class CarGazeboEnv(gym.Env):
             "phase": self.mission_phase,
             "pose": self.pose,
             "speed": self.car_vx,
-            "lidar_source": "ros_gz_3d",
+            "lidar_source": "ros_gz_3d" if self.sim_mode == "gazebo" else "analytical_track",
             "active_clouds": len(self._current_clouds),
         }
         return obs, float(reward), terminated, truncated, info

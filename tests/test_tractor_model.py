@@ -81,12 +81,16 @@ class TestTractorModelSDF(unittest.TestCase):
         else:
             self.fail(f"Unexpected number of LiDAR sensors: {len(sensors)}")
 
-    def test_split_actuation_plugins(self) -> None:
+    def test_unified_actuation_plugin(self) -> None:
         plugins = self.model.findall("plugin")
         plugin_names = {p.attrib["name"] for p in plugins}
         self.assertIn("gz::sim::systems::AckermannSteering", plugin_names)
-        self.assertIn("gz::sim::systems::DiffDrive", plugin_names)
         self.assertIn("gz::sim::systems::JointStatePublisher", plugin_names)
+        ackermann_el = self.model.find("plugin[@name='gz::sim::systems::AckermannSteering']")
+        self.assertIsNotNone(ackermann_el)
+        self.assertEqual(ackermann_el.find("steering_only").text, "false")
+        self.assertIsNotNone(ackermann_el.find("left_joint"))
+        self.assertIsNotNone(ackermann_el.find("right_joint"))
 
     def test_chassis_collision_dimensions(self) -> None:
         from src.translate.config import CAR_LENGTH, CAR_WIDTH, VEHICLE_SIZE_SCALE

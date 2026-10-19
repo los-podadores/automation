@@ -377,6 +377,26 @@ class TestRosGazeboGroundTruth(unittest.TestCase):
             # x_ego should be > FRONT_LIDAR_X because sensor is at front bumper pointing forward
             self.assertGreater(front_pts[0, 0], FRONT_LIDAR_X)
 
+    def test_analytical_mode_self_contained(self) -> None:
+        """Verify CarGazeboEnv works in analytical mode without ROS 2 or Gazebo bridge."""
+        from src.sim.car_gazebo_env import CarGazeboEnv
+
+        env = CarGazeboEnv(sim_mode="analytical", render_mode="rgb_array")
+        obs, info = env.reset()
+        self.assertEqual(obs.shape, (156,))
+        self.assertEqual(info["lidar_source"], "analytical_track")
+        self.assertFalse(info["collision"])
+
+        action = np.array([0.1, 0.5], dtype=np.float32)
+        obs, reward, term, trunc, info = env.step(action)
+        self.assertEqual(obs.shape, (156,))
+        self.assertIsInstance(reward, float)
+
+        frame = env.render()
+        self.assertEqual(frame.shape, (640, 880, 3))
+        env.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+

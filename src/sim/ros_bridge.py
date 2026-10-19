@@ -176,6 +176,9 @@ class Ros2GazeboBridge:
     def _on_point_cloud(self, pod_name: str, msg: Any) -> None:
         pts = self._parse_point_cloud2(msg)
         if pts.shape[0] == 0:
+            with self.lock:
+                if pod_name not in self.latest_point_clouds:
+                    self.latest_point_clouds[pod_name] = np.empty((0, 3), dtype=np.float32)
             return
 
         # Transform sensor local coordinates to vehicle base_link ego frame

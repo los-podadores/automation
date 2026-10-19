@@ -20,9 +20,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from typing import Any, Final
+from typing import Any, Final  # noqa: E402
 
-import numpy as np
+import gymnasium as gym  # noqa: E402
+import numpy as np  # noqa: E402
 import ray  # noqa: E402
 from ray.rllib.algorithms.ppo import PPOConfig  # noqa: E402
 from ray.tune.registry import register_env  # noqa: E402
@@ -35,7 +36,25 @@ CHECKPOINTS_DIR = BASE_DIR / "models" / "car_rllib"
 VIDEO_FPS: Final[float] = 20.0
 
 
-def env_creator(env_config: dict) -> CarGazeboEnv:
+def env_creator(env_config: dict) -> gym.Env:
+    sim_mode = env_config.get("sim_mode", "gzdrl")
+    if sim_mode == "gzdrl":
+        from src.sim.gz_drl_env import GzDrlCarEnv
+
+        fast_lidar = env_config.get("fast_lidar", False)
+        world_path = (
+            str(BASE_DIR / "src/v2/model/procedural_track_fast.sdf")
+            if fast_lidar
+            else str(BASE_DIR / "src/v2/model/procedural_track.sdf")
+        )
+        return GzDrlCarEnv(
+            world_path=world_path,
+            track_path=str(BASE_DIR / "src/v2/model/procedural_track.json"),
+            render_mode=env_config.get("render_mode", None),
+            fast_lidar=fast_lidar,
+            pose_noise_std=env_config.get("pose_noise_std", 0.0),
+            kinematics_noise_std=env_config.get("kinematics_noise_std", 0.0),
+        )
     return CarGazeboEnv(**env_config)
 
 
@@ -43,10 +62,12 @@ def evaluate_and_record(
     algo: Any,
     iter_idx: int,
     video_dir: Path,
+    sim_mode: str = "gzdrl",
+    fast_lidar: bool = False,
     num_episodes: int = 1,
     max_steps: int = 800,
 ) -> list[dict[str, Any]]:
-    """Runs evaluation episodes on the head node and writes rendered MP4 videos."""
+    """Runs evaluation episodes and writes rendered MP4 videos."""
     import cv2
     import torch
 
@@ -55,9 +76,20 @@ def evaluate_and_record(
     module = algo.get_module()
 
     for ep in range(num_episodes):
-        env = CarGazeboEnv(render_mode="rgb_array")
+        env = env_creator({
+            "sim_mode": sim_mode,
+            "fast_lidar": fast_lidar,
+            "render_mode": "rgb_array",
+        })
         obs, info = env.reset()
-        frames: list[np.ndarray] = [env.render()]
+        first_frame = env.render()
+        h, w, _ = first_frame.shape
+
+        temp_video_path = video_dir / f"eval_iter_{iter_idx:03d}_ep_{ep:02d}_temp.mp4"
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(str(temp_video_path), fourcc, VIDEO_FPS, (w, h))
+        out.write(cv2.cvtColor(first_frame, cv2.COLOR_RGB2BGR))
+
         total_reward = 0.0
         step = 0
         terminated = False
@@ -75,9 +107,14 @@ def evaluate_and_record(
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             step += 1
-            frames.append(env.render())
+            frame = env.render()
+            out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
 
+        out.release()
         env.close()
+
+        import gc
+        gc.collect()
 
         if info.get("mission_completed"):
             status = "completed"
@@ -94,14 +131,8 @@ def evaluate_and_record(
             video_dir
             / f"eval_iter_{iter_idx:03d}_ep_{ep:02d}_{status}_rew_{int(total_reward):+05d}.mp4"
         )
-
-        h, w, _ = frames[0].shape
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(str(video_path), fourcc, VIDEO_FPS, (w, h))
-        for frame in frames:
-            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            out.write(bgr)
-        out.release()
+        if temp_video_path.exists():
+            temp_video_path.replace(video_path)
 
         eval_summary = {
             "episode": ep,
@@ -137,6 +168,18 @@ def main() -> None:
         type=int,
         default=None,
         help="Number of distributed environment runners",
+    )
+    parser.add_argument(
+        "--sim-mode",
+        type=str,
+        default="gzdrl",
+        choices=["gzdrl", "analytical", "gazebo"],
+        help="Simulation mode: 'gzdrl' (in-process Gazebo Harmonic), 'analytical' (mock physics), or 'gazebo' (legacy ROS 2 bridge)",
+    )
+    parser.add_argument(
+        "--fast-lidar",
+        action="store_true",
+        help="Use fast 90x8 LiDAR profile (procedural_track_fast.sdf) for high-throughput rollouts",
     )
     parser.add_argument(
         "--eval-interval",
@@ -198,28 +241,20 @@ def main() -> None:
     os.environ["RAY_ENABLE_UV_RUNTIME_ENV"] = "0"
     os.environ["RAY_AUTH_MODE"] = "disabled"
 
-    runtime_excludes = [
-        "best_model.zip",
-        "yolov8s.pt",
-        str(BASE_DIR / "best_model.zip"),
-        str(BASE_DIR / "yolov8s.pt"),
-        "models/**",
-        "datasets/**",
-        "logs/**",
-        "*.zip",
-        "*.pt",
-        ".venv/**",
-        "src/v2/.venv/**",
-    ]
+    gzdrl_lib = str(BASE_DIR / "src/sim/gzdrl/_lib")
+    model_path = str(BASE_DIR / "src/v2/model")
+    shared_env_vars = {
+        "PYTHONPATH": f"{BASE_DIR}:{gzdrl_lib}:{os.environ.get('PYTHONPATH', '')}",
+        "LD_LIBRARY_PATH": f"{gzdrl_lib}:{os.environ.get('LD_LIBRARY_PATH', '')}",
+        "GZ_SIM_RESOURCE_PATH": f"{model_path}:{os.environ.get('GZ_SIM_RESOURCE_PATH', '')}",
+        "GZ_SIM_SYSTEM_PLUGIN_PATH": f"{gzdrl_lib}:{os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH', '')}",
+    }
 
     if args.cluster:
         print(f"[train] Connecting to Ray cluster at {HEAD_ADDRESS}...")
         ray.init(
             address=HEAD_ADDRESS,
-            runtime_env={
-                "working_dir": str(BASE_DIR),
-                "excludes": runtime_excludes,
-            },
+            runtime_env={"env_vars": shared_env_vars},
             ignore_reinit_error=True,
         )
         active_nodes = [n for n in ray.nodes() if n["Alive"]]
@@ -230,11 +265,7 @@ def main() -> None:
         os.environ.pop("RAY_ADDRESS", None)
         ray.init(
             address="local",
-            runtime_env={
-                "working_dir": str(BASE_DIR),
-                "env_vars": {"PYTHONPATH": str(BASE_DIR)},
-                "excludes": runtime_excludes,
-            },
+            runtime_env={"env_vars": shared_env_vars},
             ignore_reinit_error=True,
         )
         num_runners = args.runners if args.runners is not None else 1
@@ -249,13 +280,31 @@ def main() -> None:
             f"[train] Configuring LearnerGroup: {args.num_learners} DDP learner(s) with {args.gpus_per_learner} GPU(s) each."
         )
 
+    obs_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(156,), dtype=np.float32)
+    act_space = gym.spaces.Box(
+        low=np.array([-1.0, -1.0], dtype=np.float32),
+        high=np.array([1.0, 1.0], dtype=np.float32),
+        dtype=np.float32,
+    )
+
     config = (
         PPOConfig()
         .api_stack(
             enable_rl_module_and_learner=True,
             enable_env_runner_and_connector_v2=True,
         )
-        .environment(ENV_NAME, env_config={"pose_noise_std": 0.05, "kinematics_noise_std": 0.02})
+        .environment(
+            ENV_NAME,
+            env_config={
+                "sim_mode": args.sim_mode,
+                "fast_lidar": args.fast_lidar,
+                "pose_noise_std": 0.05,
+                "kinematics_noise_std": 0.02,
+            },
+            observation_space=obs_space,
+            action_space=act_space,
+            disable_env_checking=True,
+        )
         .framework("torch")
         .training(
             train_batch_size=args.train_batch_size,
@@ -266,7 +315,7 @@ def main() -> None:
             lambda_=0.95,
             clip_param=0.2,
             vf_loss_coeff=0.5,
-            entropy_coeff=0.01,
+            entropy_coeff=0.03,
         )
         .learners(
             num_learners=args.num_learners,
@@ -276,6 +325,7 @@ def main() -> None:
         .env_runners(
             num_env_runners=num_runners,
             num_envs_per_env_runner=args.num_envs_per_runner,
+            create_env_on_local_worker=False,
             rollout_fragment_length="auto",
         )
     )
@@ -283,16 +333,22 @@ def main() -> None:
     algo = config.build_algo()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("\n[train] Starting PPO training loop...")
+    print("\n[train] Starting PPO training loop...", flush=True)
     video_dir = BASE_DIR / args.video_dir
     for i in range(args.iters):
         result = algo.train()
         env_runners_stats = result.get("env_runners", {})
         mean_return = env_runners_stats.get("episode_return_mean", float("nan"))
-        episodes = env_runners_stats.get("episodes_timesteps_total", 0)
+        mean_len = env_runners_stats.get("episode_len_mean", float("nan"))
+        total_steps = int(env_runners_stats.get("num_env_steps_sampled_lifetime", 0))
+        steps_this_iter = int(env_runners_stats.get("num_env_steps_sampled", 0))
+        iter_time_s = float(result.get("time_this_iter_s", 0.0))
+        fps = (steps_this_iter / iter_time_s) if iter_time_s > 0.0 else 0.0
         iter_num = i + 1
         print(
-            f"  [Iter {iter_num:2d}/{args.iters}] Return Mean: {mean_return:6.2f} | Total Steps: {episodes}"
+            f"  [Iter {iter_num:2d}/{args.iters}] Return: {mean_return:6.2f} | "
+            f"EpLen: {mean_len:5.1f} | Steps: {total_steps:6d} (+{steps_this_iter:4d}) | Speed: {fps:6.1f} steps/s ({iter_time_s:4.1f}s)",
+            flush=True,
         )
 
         if args.eval_interval > 0 and (
@@ -302,6 +358,8 @@ def main() -> None:
                 algo=algo,
                 iter_idx=iter_num,
                 video_dir=video_dir,
+                sim_mode=args.sim_mode,
+                fast_lidar=args.fast_lidar,
                 num_episodes=args.eval_episodes,
                 max_steps=args.eval_max_steps,
             )

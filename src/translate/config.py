@@ -92,10 +92,10 @@ COLLISION_RADIUS: Final[float] = 1.15 * VEHICLE_SIZE_SCALE  # Bounding collision
 
 # Non-holonomic Ackermann Dynamic Limits
 MAX_STEER_RAD: Final[float] = 0.40  # ~23 degrees maximum front steering angle (joint limit)
-MAX_SPEED_MPS: Final[float] = 2.0  # 7.2 km/h max forward velocity
-MIN_SPEED_MPS: Final[float] = -1.0  # -3.6 km/h max reverse velocity
-MAX_ACCEL_MPSS: Final[float] = 1.5  # Max forward acceleration (m/s^2)
-MAX_BRAKE_MPSS: Final[float] = 2.5  # Max service braking deceleration (m/s^2)
+MAX_SPEED_MPS: Final[float] = 3.5  # 12.6 km/h max forward velocity
+MIN_SPEED_MPS: Final[float] = -2.0  # -7.2 km/h max reverse velocity
+MAX_ACCEL_MPSS: Final[float] = 2.5  # Max forward acceleration (m/s^2)
+MAX_BRAKE_MPSS: Final[float] = 3.5  # Max service braking deceleration (m/s^2)
 DT_SECONDS: Final[float] = 0.05  # 20 Hz simulation / control loop
 
 # --- Surround 4-Pod Camera-LiDAR Perception ---
@@ -127,4 +127,14 @@ REAR_LIDAR_Y: Final[float] = 0.00  # Centered laterally (meters)
 REAR_LIDAR_Z: Final[float] = 0.60 * VEHICLE_SIZE_SCALE  # Rear bumper mount height (meters above ground)
 REAR_LIDAR_PITCH_RAD: Final[float] = 0.349066  # ~20 degrees downward tilt
 REAR_LIDAR_YAW_RAD: Final[float] = 3.141592653589793  # 180 degrees (rear facing)
+
+# --- RL Reward & Hazard Constants ---
+COLLISION_PENALTY: Final[float] = 500.0  # Terminal penalty for collision or leaving track
+OBSTACLE_SAFETY_MARGIN_M: Final[float] = 1.0  # Repulsive hazard clearance zone around vehicle (meters)
+OBSTACLE_PROXIMITY_WEIGHT: Final[float] = 2.0  # Max step penalty for entering obstacle proximity
+MIN_CRUISE_SPEED_MPS: Final[float] = 1.0  # Minimum forward cruise speed to prevent stalling/crawling
+CRAWL_PENALTY_WEIGHT: Final[float] = 0.3  # Penalty weight for crawling below MIN_CRUISE_SPEED_MPS
+CORRIDOR_DEADBAND_RATIO: Final[float] = 0.6  # Ratio of corridor half-width penalty-free for maneuvering
+VIDEO_FPS: Final[int] = 20  # Default framerate for recorded video sequences
+
 

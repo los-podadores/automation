@@ -147,11 +147,12 @@ def revolute(
 
 
 def plugin(parent: ET.Element, system: str, filename: str, values: dict) -> None:
+    fn = filename if (filename.endswith(".so") or "plugin" in filename) else f"gz-sim-{filename}-system"
     entry = element(
         parent,
         "plugin",
         name=f"gz::sim::systems::{system}",
-        filename=f"gz-sim-{filename}-system",
+        filename=fn,
     )
     for key, value in values.items():
         element(entry, key, value)
@@ -212,9 +213,14 @@ def _scaled_geometry(g: dict, size_scale: float) -> dict:
     return scaled
 
 
-def create_model(g: dict, p: dict) -> ET.Element:
+def create_model(
+    g: dict,
+    p: dict,
+    model_name: str = "tractor",
+    fast_lidar: bool = False,
+) -> ET.Element:
     sdf = ET.Element("sdf", version="1.10")
-    model = element(sdf, "model", name="tractor", canonical_link="chassis")
+    model = element(sdf, "model", name=model_name, canonical_link="chassis")
     element(model, "self_collide", "false")
     physics = p["physics"]
     size_scale = float(p.get("vehicle", {}).get("size_scale", 1.0))
@@ -233,9 +239,12 @@ def create_model(g: dict, p: dict) -> ET.Element:
     lidar_cfg = p.get("lidar", {})
     layout = lidar_cfg.get("layout", "dual_directional_3d")
 
+    h_samples = 90 if fast_lidar else 180
+    default_v_samples = 8 if fast_lidar else 16
+
     if layout == "dual_directional_3d":
         pitch_down = float(lidar_cfg.get("pitch_down_rad", 0.349066))
-        v_samples = int(lidar_cfg.get("vertical_samples", 16))
+        v_samples = default_v_samples if fast_lidar else int(lidar_cfg.get("vertical_samples", 16))
         v_min = float(lidar_cfg.get("vertical_min_rad", -0.436332))
         v_max = float(lidar_cfg.get("vertical_max_rad", 0.261799))
         front_x = float(lidar_cfg.get("front_x_m", 1.45))
@@ -251,7 +260,7 @@ def create_model(g: dict, p: dict) -> ET.Element:
             name="lidar_front",
             pose=(front_x, front_y, front_z, 0, pitch_down, 0),
             topic="/tractor/lidar/front",
-            samples=180,
+            samples=h_samples,
             min_angle=-1.047198,
             max_angle=1.047198,
             vertical_samples=v_samples,
@@ -265,7 +274,7 @@ def create_model(g: dict, p: dict) -> ET.Element:
             name="lidar_rear",
             pose=(rear_x, rear_y, rear_z, 0, pitch_down, math.pi),
             topic="/tractor/lidar/rear",
-            samples=180,
+            samples=h_samples,
             min_angle=-1.047198,
             max_angle=1.047198,
             vertical_samples=v_samples,
@@ -427,41 +436,28 @@ def create_model(g: dict, p: dict) -> ET.Element:
         relative_to="chassis",
     )
 
-    # Actuation: Ackermann steering knuckle control + rear differential drive
+    # Actuation: Unified Ackermann steering and traction plugin (GzDRL in-process control)
     plugin(
         model,
         "AckermannSteering",
-        "ackermann-steering",
+        "ackermann_plugin",
         {
-            "steering_only": "true",
+            "steering_only": "false",
             "left_steering_joint": "front_left_steering",
             "right_steering_joint": "front_right_steering",
-            "wheel_base": g["wheelbase_m"],
-            "wheel_separation": g["front"]["axle_length_m"],
-            "steering_limit": p["control"]["max_steering_rad"],
-            "steer_p_gain": 4.0,
-            "topic": "/model/tractor/steering_angle",
-        },
-    )
-    plugin(
-        model,
-        "DiffDrive",
-        "diff-drive",
-        {
             "left_joint": "rear_left_spin",
             "right_joint": "rear_right_spin",
+            "wheel_base": g["wheelbase_m"],
             "wheel_separation": g["rear"]["track_m"],
+            "kingpin_width": g["front"]["axle_length_m"],
             "wheel_radius": g["rear"]["wheel_radius_m"],
-            "topic": "/model/tractor/rear_axle/cmd_vel",
-            "odom_topic": "/model/tractor/wheel_odometry",
-            "tf_topic": "/model/tractor/wheel_odometry_tf",
-            "frame_id": "tractor/odom",
-            "child_frame_id": "tractor/rear_axle",
-            "odom_publish_frequency": 30,
-            "max_linear_acceleration": 4.0,
-            "min_linear_acceleration": -4.0,
-            "max_angular_acceleration": 6.0,
-            "min_angular_acceleration": -6.0,
+            "steering_limit": p["control"]["max_steering_rad"],
+            "steer_p_gain": 10.0,
+            "min_velocity": -5.0,
+            "max_velocity": 5.0,
+            "min_acceleration": -10.0,
+            "max_acceleration": 10.0,
+            "topic": f"/model/{model_name}/steering_angle",
         },
     )
     plugin(
@@ -526,12 +522,11 @@ def main() -> None:
     g = extract_geometry(cad_path)
     p = load_parameters()
 
-    # Generate SDF and dimensions
-    sdf_tree = create_model(g, p)
+    # 1. Standard model (180x16 LiDAR)
+    sdf_tree = create_model(g, p, model_name="tractor", fast_lidar=False)
     target_sdf = ROOT / "tractor.sdf"
     write_xml(target_sdf, sdf_tree)
 
-    # Also write to tractor/ directory for model://tractor resolution
     model_dir = ROOT / "tractor"
     model_dir.mkdir(parents=True, exist_ok=True)
     write_xml(model_dir / "model.sdf", sdf_tree)
@@ -543,9 +538,29 @@ def main() -> None:
     element(
         config_tree,
         "description",
-        "CAD-derived articulated tractor with dual directional 3D LiDAR.",
+        "CAD-derived articulated tractor with dual directional 3D LiDAR (180x16).",
     )
     write_xml(model_dir / "model.config", config_tree)
+
+    # 2. Fast model (90x8 LiDAR for rapid RL rollouts)
+    sdf_fast_tree = create_model(g, p, model_name="tractor", fast_lidar=True)
+    target_fast_sdf = ROOT / "tractor_fast.sdf"
+    write_xml(target_fast_sdf, sdf_fast_tree)
+
+    model_fast_dir = ROOT / "tractor_fast"
+    model_fast_dir.mkdir(parents=True, exist_ok=True)
+    write_xml(model_fast_dir / "model.sdf", sdf_fast_tree)
+
+    config_fast_tree = ET.Element("model")
+    element(config_fast_tree, "name", "tractor_fast")
+    element(config_fast_tree, "version", "1.0")
+    element(config_fast_tree, "sdf", "model.sdf", version="1.10")
+    element(
+        config_fast_tree,
+        "description",
+        "CAD-derived articulated tractor with fast dual directional 3D LiDAR (90x8).",
+    )
+    write_xml(model_fast_dir / "model.config", config_fast_tree)
 
     target_json = ROOT / "cad_dimensions.json"
     target_json.write_text(
@@ -554,11 +569,12 @@ def main() -> None:
     )
 
     print(
-        f"Model generated at {target_sdf} and {model_dir / 'model.sdf'}:\n"
+        f"Models generated:\n"
+        f"  Standard (180x16): {target_sdf} and {model_dir / 'model.sdf'}\n"
+        f"  Fast (90x8): {target_fast_sdf} and {model_fast_dir / 'model.sdf'}\n"
         f"  Wheelbase: {g['wheelbase_m']:.3f} m\n"
         f"  Rear wheel radius: {g['rear']['wheel_radius_m']:.3f} m (track: {g['rear']['track_m']:.3f} m)\n"
         f"  Front wheel radius: {g['front']['wheel_radius_m']:.3f} m (track: {g['front']['track_m']:.3f} m)\n"
-        f"  LiDAR sensors: 2 directional 3D (front, rear) on /tractor/lidar/*/points"
     )
 
 
