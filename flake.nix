@@ -2,7 +2,8 @@
   description = "Los Podadores automation and RLlib workspace";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-26.05";
+    nixpkgs-unstable.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -10,6 +11,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-unstable,
       flake-utils,
       ...
     }:
@@ -20,9 +22,15 @@
           inherit system;
           config.allowUnfree = true;
         };
-        libs = with pkgs; [
-          stdenv.cc.cc
+        unstable = import nixpkgs-unstable {
+          inherit system;
+          config.allowUnfree = true;
+        };
+        ldLibraries = with pkgs; [
+          stdenv.cc.cc.lib
           zlib
+          zstd
+          openssl
           glib
           libxcb
           libglvnd
@@ -40,11 +48,9 @@
       {
         devShells.default = pkgs.mkShell {
           name = "los-podadores-dev";
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath libs;
           packages = with pkgs; [
             uv
             ruff
-            bun
 
             pkg-config
             freetype
@@ -65,7 +71,11 @@
             unset PYTHONPATH
           '';
 
-          env = { };
+          env = {
+            UV_PYTHON_PREFERENCE = "only-managed";
+            NIX_LD = "${pkgs.stdenv.cc.bintools.dynamicLinker}";
+            NIX_LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath ldLibraries;
+          };
         };
       }
     );
